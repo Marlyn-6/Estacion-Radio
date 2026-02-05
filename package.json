@@ -4,8 +4,9 @@
     "description": "Estación de radio online con streaming en vivo y AutoDJ",
     "main": "server.js",
     "scripts": {
-        "start": "node server.js",
-        "dev": "nodemon server.js"
+        "start": "node init.js && node server.js",
+        "dev": "nodemon server.js",
+        "build": "npm install --build-from-source"
     },
     "keywords": [
         "radio",
