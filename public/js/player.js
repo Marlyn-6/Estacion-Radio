@@ -34,8 +34,25 @@ const elements = {
     listenersCount: document.getElementById('listener-count'),
     liveIndicator: document.getElementById('live-indicator'),
     visualizer: document.getElementById('visualizer'),
-    mobilePlayBtn: document.getElementById('mobile-play-btn')
+    mobilePlayBtn: document.getElementById('mobile-play-btn'),
+    debugPanel: document.getElementById('debug-panel'),
+    debugInfo: document.getElementById('debug-info')
 };
+
+// Función de debug visible
+function mostrarDebug(mensaje) {
+    if (elements.debugPanel && elements.debugInfo) {
+        elements.debugPanel.style.display = 'block';
+        const timestamp = new Date().toLocaleTimeString();
+        elements.debugInfo.innerHTML += `<div>[${timestamp}] ${mensaje}</div>`;
+        // Mantener solo los últimos 10 mensajes
+        const lines = elements.debugInfo.querySelectorAll('div');
+        if (lines.length > 10) {
+            lines[0].remove();
+        }
+    }
+    console.log(mensaje);
+}
 
 // ============================================
 // INICIALIZACIÓN
@@ -63,6 +80,13 @@ function inicializar() {
     // Configurar controles
     configurarControles();
 
+    // Configurar botón móvil específicamente
+    if (elements.mobilePlayBtn) {
+        elements.mobilePlayBtn.addEventListener('click', manejarInteraccionUsuario);
+        elements.mobilePlayBtn.addEventListener('touchstart', manejarInteraccionUsuario);
+        console.log('✅ Botón móvil configurado');
+    }
+
     // Notificar al servidor que somos un oyente
     socket.emit('oyente:unirse');
 
@@ -84,7 +108,7 @@ function ajustarCanvas() {
 function manejarInteraccionUsuario() {
     if (!state.userInteracted) {
         state.userInteracted = true;
-        console.log('✅ Usuario interactuó - Autoplay habilitado');
+        mostrarDebug('✅ Usuario interactuó - Autoplay habilitado');
 
         // Ocultar botón móvil si está visible
         if (elements.mobilePlayBtn) {
@@ -94,15 +118,18 @@ function manejarInteraccionUsuario() {
         // Reanudar AudioContext si está suspendido
         if (state.audioContext && state.audioContext.state === 'suspended') {
             state.audioContext.resume();
+            mostrarDebug('🔊 AudioContext reanudado');
         }
 
         // NUEVO: Intentar reproducir inmediatamente si ya hay stream
         if (state.audioElement && state.audioElement.srcObject) {
+            mostrarDebug('🎵 Intentando reproducir stream existente...');
             reproducirStreamPendiente();
         }
 
         // Reproducir stream pendiente si existe
         if (state.pendingStream) {
+            mostrarDebug('🎵 Reproduciendo stream pendiente...');
             reproducirStreamPendiente();
         }
     }
@@ -114,7 +141,7 @@ function manejarInteraccionUsuario() {
 
 socket.on('oferta-webrtc', async (data) => {
     const { oferta, de } = data;
-    console.log('📡 Oferta WebRTC recibida del locutor:', de);
+    mostrarDebug('📡 Oferta WebRTC recibida');
     await manejarOferta(oferta, de);
 });
 
@@ -126,7 +153,7 @@ async function manejarOferta(oferta, de) {
 
             // CRÍTICO: Cuando recibimos el stream
             state.peerConnection.ontrack = (event) => {
-                console.log('🎵 Stream de audio recibido del locutor');
+                mostrarDebug('🎵 Stream recibido del locutor');
                 const stream = event.streams[0];
 
                 // Asignar stream al elemento de audio
@@ -149,15 +176,17 @@ async function manejarOferta(oferta, de) {
 
                     // Reproducir automáticamente si el usuario ya interactuó
                     if (state.userInteracted) {
+                        mostrarDebug('✅ Usuario ya interactuó, reproduciendo...');
                         reproducirStreamPendiente();
                     } else {
                         // Guardar como pendiente
                         state.pendingStream = stream;
-                        console.log('⏳ Stream guardado, esperando interacción del usuario...');
+                        mostrarDebug('⏳ Esperando interacción...');
                         
                         // Mostrar botón móvil "Toca para Escuchar"
                         if (elements.mobilePlayBtn) {
                             elements.mobilePlayBtn.style.display = 'block';
+                            mostrarDebug('🔵 Botón visible - TOCA AQUÍ');
                         }
                     }
                 }
@@ -289,15 +318,19 @@ function dibujarVisualizador() {
 // ============================================
 
 function reproducirStreamPendiente() {
-    if (!state.audioElement || !state.audioElement.srcObject) return;
+    if (!state.audioElement || !state.audioElement.srcObject) {
+        mostrarDebug('⚠️ No hay stream para reproducir');
+        return;
+    }
 
+    mostrarDebug('▶️ Reproduciendo...');
     state.audioElement.play()
         .then(() => {
-            console.log('✅ Audio reproduciéndose correctamente');
+            mostrarDebug('✅ AUDIO FUNCIONANDO');
             state.pendingStream = null;
         })
         .catch(err => {
-            console.warn('⚠️ Error al reproducir audio:', err);
+            mostrarDebug('❌ Error: ' + err.name);
             // Guardar para intentar más tarde
             if (state.audioElement.srcObject) {
                 state.pendingStream = state.audioElement.srcObject;

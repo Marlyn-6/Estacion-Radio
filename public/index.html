@@ -33,6 +33,12 @@
                 🔊 Toca para Escuchar
             </button>
 
+            <!-- Panel de Debug (solo visible en desarrollo) -->
+            <div id="debug-panel" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.5); border-radius: 0.5rem; font-size: 0.8rem; text-align: left;">
+                <div><strong>🔍 Estado Debug:</strong></div>
+                <div id="debug-info"></div>
+            </div>
+
             <div class="volume-control">
                 <span style="font-size: 1.2rem;">🔈</span>
                 <input type="range" id="volume-slider" class="volume-slider" min="0" max="100" value="70">
