@@ -1,15 +1,25 @@
+// ============================================
+// RADIO OYENTE - WebRTC Audio Streaming
+// ============================================
+
 // Conexión Socket.IO
 const socket = io();
 
-// Variables de estado
-let contextoAudio = null;
-let analizador = null;
-let estaReproduciendo = false;
-let fuenteAudio = null;
+// Estado global
+const state = {
+    peerConnection: null,
+    audioElement: null,
+    audioContext: null,
+    analyser: null,
+    audioSource: null,
+    userInteracted: false,
+    pendingStream: null,
+    currentVolume: 0.7,
+    isMuted: false
+};
 
-// Variables WebRTC
-let conexionPar = null; // RTCPeerConnection
-const configRTC = {
+// Configuración WebRTC
+const rtcConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' }
@@ -17,127 +27,224 @@ const configRTC = {
 };
 
 // Elementos DOM
-const botonPlay = document.getElementById('play-button');
-const iconoPlay = document.getElementById('play-icon');
-const sliderVolumen = document.getElementById('volume-slider');
-const tituloCancion = document.getElementById('song-title');
-const artistaCancion = document.getElementById('song-artist');
-const contadorOyentes = document.getElementById('listener-count');
-const indicadorEnVivo = document.getElementById('live-indicator');
-const canvas = document.getElementById('visualizer');
-const ctxCanvas = canvas.getContext('2d');
+const elements = {
+    volumeSlider: document.getElementById('volume-slider'),
+    songTitle: document.getElementById('song-title'),
+    songArtist: document.getElementById('song-artist'),
+    listenersCount: document.getElementById('listener-count'),
+    liveIndicator: document.getElementById('live-indicator'),
+    visualizer: document.getElementById('visualizer')
+};
 
-// Ajustar tamaño del canvas
+// ============================================
+// INICIALIZACIÓN
+// ============================================
+
+function inicializar() {
+    // Crear elemento de audio (SIN autoplay)
+    state.audioElement = document.createElement('audio');
+    state.audioElement.autoplay = false;
+    state.audioElement.controls = false;
+    state.audioElement.style.display = 'none';
+    state.audioElement.volume = state.currentVolume;
+    document.body.appendChild(state.audioElement);
+
+    // Configurar canvas del visualizador
+    ajustarCanvas();
+    window.addEventListener('resize', ajustarCanvas);
+
+    // Detectar interacción del usuario
+    document.addEventListener('click', manejarInteraccionUsuario, { once: true });
+    document.addEventListener('keydown', manejarInteraccionUsuario, { once: true });
+
+    // Configurar controles
+    configurarControles();
+
+    // Notificar al servidor que somos un oyente
+    socket.emit('oyente:unirse');
+
+    console.log('✅ Oyente inicializado');
+}
+
 function ajustarCanvas() {
-    canvas.width = canvas.offsetWidth;
-    canvas.height = canvas.offsetHeight;
-}
-window.addEventListener('resize', ajustarCanvas);
-ajustarCanvas();
-
-// Elemento de audio (oculto, usamos AudioContext para visualización)
-const elementoAudio = new Audio();
-elementoAudio.crossOrigin = 'anonymous';
-
-// Evento Play/Pausa
-botonPlay.addEventListener('click', alternarReproduccion);
-
-function alternarReproduccion() {
-    if (!estaReproduciendo) {
-        iniciarReproduccion();
-    } else {
-        detenerReproduccion();
+    const canvas = elements.visualizer;
+    if (canvas) {
+        canvas.width = canvas.offsetWidth;
+        canvas.height = canvas.offsetHeight;
     }
 }
 
-async function iniciarReproduccion() {
-    try {
-        // Inicializar contexto de audio (necesario interacción usuario)
-        if (!contextoAudio) {
-            contextoAudio = new (window.AudioContext || window.webkitAudioContext)();
-            analizador = contextoAudio.createAnalyser();
-            analizador.fftSize = 256;
+// ============================================
+// INTERACCIÓN DEL USUARIO (Política de Autoplay)
+// ============================================
+
+function manejarInteraccionUsuario() {
+    if (!state.userInteracted) {
+        state.userInteracted = true;
+        console.log('✅ Usuario interactuó - Autoplay habilitado');
+
+        // Reanudar AudioContext si está suspendido
+        if (state.audioContext && state.audioContext.state === 'suspended') {
+            state.audioContext.resume();
         }
 
-        if (contextoAudio.state === 'suspended') {
-            await contextoAudio.resume();
+        // Reproducir stream pendiente si existe
+        if (state.pendingStream) {
+            reproducirStreamPendiente();
         }
-
-        // Conectar nodo de audio al analizador (solo si no está ya conectado)
-        if (!fuenteAudio) {
-            fuenteAudio = contextoAudio.createMediaElementSource(elementoAudio);
-            fuenteAudio.connect(analizador);
-            analizador.connect(contextoAudio.destination);
-        }
-
-        // Configurar volumen
-        elementoAudio.volume = sliderVolumen.value / 100;
-
-        // Determinar qué reproducir (Vivo o AutoDJ)
-        try {
-            const respuestaEstado = await fetch('/api/transmision/estado');
-            const datosEstado = await respuestaEstado.json();
-
-            if (datosEstado.estado.estaEnVivo) {
-                console.log('📻 Modo EN VIVO detectado - Esperando conexión WebRTC...');
-                tituloCancion.textContent = "Transmisión En Vivo";
-                artistaCancion.textContent = "Conectando...";
-                indicadorEnVivo.style.display = 'block';
-            } else if (datosEstado.estado.cancionActual) {
-                console.log('🎵 Modo AutoDJ - Reproduciendo archivo');
-                elementoAudio.src = `/api/canciones/${datosEstado.estado.cancionActual.id}/audio`;
-                await elementoAudio.play();
-
-                tituloCancion.textContent = datosEstado.estado.cancionActual.titulo;
-                artistaCancion.textContent = datosEstado.estado.cancionActual.artista;
-                indicadorEnVivo.style.display = 'none';
-            } else {
-                console.log('Silencio... esperando música.');
-                indicadorEnVivo.style.display = 'none';
-            }
-        } catch (e) {
-            console.error("Error al obtener estado:", e);
-        }
-
-        estaReproduciendo = true;
-        botonPlay.classList.add('playing');
-        iconoPlay.textContent = '⏸';
-
-        // Notificar al servidor que hay un oyente activo
-        socket.emit('oyente:unirse');
-
-        // Iniciar visualizador
-        dibujarVisualizador();
-
-    } catch (error) {
-        console.error('Error de reproducción:', error);
     }
 }
 
-function detenerReproduccion() {
-    elementoAudio.pause();
-    estaReproduciendo = false;
-    botonPlay.classList.remove('playing');
-    iconoPlay.textContent = '▶';
-}
+// ============================================
+// WEBRTC - RECIBIR OFERTA DEL LOCUTOR
+// ============================================
 
-// Control de Volumen
-sliderVolumen.addEventListener('input', (e) => {
-    elementoAudio.volume = e.target.value / 100;
+socket.on('oferta-webrtc', async (data) => {
+    const { oferta, de } = data;
+    console.log('📡 Oferta WebRTC recibida del locutor:', de);
+    await manejarOferta(oferta, de);
 });
 
-// Visualizador (Ondas)
+async function manejarOferta(oferta, de) {
+    try {
+        // Crear RTCPeerConnection si no existe
+        if (!state.peerConnection) {
+            state.peerConnection = new RTCPeerConnection(rtcConfig);
+
+            // CRÍTICO: Cuando recibimos el stream
+            state.peerConnection.ontrack = (event) => {
+                console.log('🎵 Stream de audio recibido del locutor');
+                const stream = event.streams[0];
+
+                // Asignar stream al elemento de audio
+                if (state.audioElement) {
+                    state.audioElement.srcObject = stream;
+
+                    // Conectar al visualizador INMEDIATAMENTE (no requiere interacción)
+                    conectarStreamAlVisualizador(stream);
+
+                    // Mostrar indicador EN VIVO
+                    if (elements.liveIndicator) {
+                        elements.liveIndicator.style.display = 'block';
+                    }
+                    if (elements.songTitle) {
+                        elements.songTitle.textContent = '🔴 EN VIVO';
+                    }
+                    if (elements.songArtist) {
+                        elements.songArtist.textContent = 'Transmisión en directo';
+                    }
+
+                    // Reproducir automáticamente si el usuario ya interactuó
+                    if (state.userInteracted) {
+                        reproducirStreamPendiente();
+                    } else {
+                        // Guardar como pendiente
+                        state.pendingStream = stream;
+                        console.log('⏳ Stream guardado, esperando interacción del usuario...');
+                    }
+                }
+            };
+
+            // Manejar ICE candidates
+            state.peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    socket.emit('candidato-ice-webrtc', {
+                        candidato: event.candidate,
+                        para: de
+                    });
+                }
+            };
+
+            // Manejar cambios de estado de conexión
+            state.peerConnection.onconnectionstatechange = () => {
+                console.log('📡 Estado conexión WebRTC:', state.peerConnection.connectionState);
+                if (state.peerConnection.connectionState === 'failed' || 
+                    state.peerConnection.connectionState === 'disconnected') {
+                    limpiarConexion();
+                }
+            };
+        }
+
+        // Configurar oferta remota
+        await state.peerConnection.setRemoteDescription(new RTCSessionDescription(oferta));
+
+        // Crear y enviar respuesta
+        const respuesta = await state.peerConnection.createAnswer();
+        await state.peerConnection.setLocalDescription(respuesta);
+
+        socket.emit('respuesta-webrtc', {
+            respuesta: respuesta,
+            para: de
+        });
+
+        console.log('✅ Respuesta WebRTC enviada');
+
+    } catch (error) {
+        console.error('❌ Error al manejar oferta WebRTC:', error);
+    }
+}
+
+// ============================================
+// WEBRTC - RECIBIR ICE CANDIDATES
+// ============================================
+
+socket.on('candidato-ice-webrtc', async (data) => {
+    const { candidato, de } = data;
+    if (state.peerConnection) {
+        try {
+            await state.peerConnection.addIceCandidate(new RTCIceCandidate(candidato));
+            console.log('✅ ICE candidate agregado');
+        } catch (error) {
+            console.error('❌ Error al agregar ICE candidate:', error);
+        }
+    }
+});
+
+// ============================================
+// VISUALIZADOR DE AUDIO
+// ============================================
+
+function conectarStreamAlVisualizador(stream) {
+    // Crear AudioContext solo cuando sea necesario
+    if (!state.audioContext || !state.analyser) {
+        try {
+            state.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            state.analyser = state.audioContext.createAnalyser();
+            state.analyser.fftSize = 128;
+            state.analyser.smoothingTimeConstant = 0.8;
+            dibujarVisualizador(); // Iniciar loop de dibujo
+        } catch (e) {
+            console.log('⚠️ AudioContext no soportado:', e);
+            return;
+        }
+    }
+
+    try {
+        // Conectar stream al analyser (NO a destination, solo visualización)
+        if (!state.audioSource) {
+            state.audioSource = state.audioContext.createMediaStreamSource(stream);
+            state.audioSource.connect(state.analyser);
+            console.log('✅ Stream conectado al visualizador');
+        }
+    } catch (e) {
+        console.warn('⚠️ No se pudo conectar al visualizador:', e);
+    }
+}
+
 function dibujarVisualizador() {
-    if (!estaReproduciendo) return;
     requestAnimationFrame(dibujarVisualizador);
-    if (!analizador) return;
 
-    const bufferLength = analizador.frequencyBinCount;
+    const canvas = elements.visualizer;
+    if (!canvas || !state.analyser) return;
+
+    const ctx = canvas.getContext('2d');
+    const bufferLength = state.analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
-    analizador.getByteFrequencyData(dataArray);
+    state.analyser.getByteFrequencyData(dataArray);
 
-    ctxCanvas.fillStyle = 'rgba(0, 0, 0, 0.2)';
-    ctxCanvas.fillRect(0, 0, canvas.width, canvas.height);
+    // Fondo con efecto de trail
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.2)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     const barWidth = (canvas.width / bufferLength) * 2.5;
     let barHeight;
@@ -146,156 +253,130 @@ function dibujarVisualizador() {
     for (let i = 0; i < bufferLength; i++) {
         barHeight = (dataArray[i] / 255) * canvas.height;
 
-        const gradient = ctxCanvas.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+        // Gradiente de colores
+        const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
         gradient.addColorStop(0, '#6366f1');
         gradient.addColorStop(0.5, '#ec4899');
         gradient.addColorStop(1, '#14b8a6');
 
-        ctxCanvas.fillStyle = gradient;
-        ctxCanvas.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
 
         x += barWidth + 1;
     }
 }
 
 // ============================================
-// LÓGICA WEBRTC (Lado Oyente)
+// REPRODUCCIÓN DE AUDIO
 // ============================================
 
-// 1. Recibir OFERTA del Transmisor
-socket.on('oferta-webrtc', async (data) => {
-    const { oferta, de } = data;
-    console.log('📡 Recibida oferta WebRTC de:', de);
+function reproducirStreamPendiente() {
+    if (!state.audioElement || !state.audioElement.srcObject) return;
 
-    try {
-        // Si ya hay una conexión, ciérrala
-        if (conexionPar) {
-            conexionPar.close();
-        }
-
-        conexionPar = new RTCPeerConnection(configRTC);
-
-        // A. Cuando llegue el STREAM de audio
-        conexionPar.ontrack = (evento) => {
-            console.log('🎵 ¡Audio en vivo recibido!');
-            const stream = evento.streams[0];
-
-            // Asignar el stream al elemento de audio
-            elementoAudio.srcObject = stream;
-
-            // Reproducir si el usuario ya le dio Play
-            if (estaReproduciendo) {
-                elementoAudio.play().catch(e => console.error("Error autoplay stream:", e));
+    state.audioElement.play()
+        .then(() => {
+            console.log('✅ Audio reproduciéndose correctamente');
+            state.pendingStream = null;
+        })
+        .catch(err => {
+            console.warn('⚠️ Error al reproducir audio:', err);
+            // Guardar para intentar más tarde
+            if (state.audioElement.srcObject) {
+                state.pendingStream = state.audioElement.srcObject;
             }
-        };
-
-        // B. Manejar Candidatos ICE
-        conexionPar.onicecandidate = (evento) => {
-            if (evento.candidate) {
-                socket.emit('candidato-ice-webrtc', {
-                    candidato: evento.candidate,
-                    para: de
-                });
-            }
-        };
-
-        // C. Configurar oferta remota y crear respuesta
-        await conexionPar.setRemoteDescription(new RTCSessionDescription(oferta));
-        const respuesta = await conexionPar.createAnswer();
-        await conexionPar.setLocalDescription(respuesta);
-
-        // D. Enviar respuesta al Transmisor
-        socket.emit('respuesta-webrtc', {
-            respuesta: respuesta,
-            para: de
         });
+}
 
-    } catch (error) {
-        console.error('Error en WebRTC Oyente:', error);
-    }
-});
+// ============================================
+// CONTROLES DE VOLUMEN Y MUTE
+// ============================================
 
-// 2. Recibir Candidatos ICE del Transmisor
-socket.on('candidato-ice-webrtc', async (data) => {
-    const { candidato } = data;
-    if (conexionPar) {
-        try {
-            await conexionPar.addIceCandidate(new RTCIceCandidate(candidato));
-        } catch (e) {
-            console.error('Error agregando candidato ICE:', e);
-        }
-    }
-});
-
-// 3. Manejar reinicio del transmisor
-socket.on('transmisor-listo', () => {
-    console.log('Transmisor se ha reiniciado');
-});
-
-// Eventos de Socket.IO generales
-socket.on('estadisticas:actualizar', (data) => {
-    contadorOyentes.textContent = data.cantidadOyentes;
-});
-
-socket.on('cancion:actualizar', (data) => {
-    if (data.cancion) {
-        console.log('Nueva canción AutoDJ:', data.cancion.titulo);
-        // Si estamos reproduciendo y NO estamos en vivo, cambiar canción AutoDJ
-        const estaEnVivo = document.getElementById('live-indicator').style.display === 'block';
-
-        if (estaReproduciendo && !estaEnVivo) {
-            tituloCancion.textContent = data.cancion.titulo;
-            artistaCancion.textContent = data.cancion.artista;
-            document.getElementById('page-title').textContent = `${data.cancion.titulo} | Radio`;
-
-            // Importante: Limpiar WebRTC si hubiera
-            if (elementoAudio.srcObject) {
-                elementoAudio.srcObject = null;
+function configurarControles() {
+    // Control de volumen
+    if (elements.volumeSlider) {
+        elements.volumeSlider.value = state.currentVolume * 100;
+        elements.volumeSlider.addEventListener('input', (e) => {
+            // Activar interacción si es la primera vez
+            if (!state.userInteracted) {
+                manejarInteraccionUsuario();
             }
+            manejarCambioVolumen(e);
+        });
+    }
+}
 
-            elementoAudio.src = `/api/canciones/${data.cancion.id}/audio`;
-            elementoAudio.play().catch(e => console.log('Autoplay error:', e));
-        }
+function manejarCambioVolumen(e) {
+    const volumen = e.target.value / 100;
+    state.currentVolume = volumen;
+    
+    if (state.audioElement) {
+        state.audioElement.volume = volumen;
+    }
+
+    // Si estaba muteado, desmutearlo
+    if (state.isMuted && volumen > 0) {
+        state.isMuted = false;
+    }
+}
+
+// ============================================
+// LIMPIEZA Y DESCONEXIÓN
+// ============================================
+
+function limpiarConexion() {
+    if (state.peerConnection) {
+        state.peerConnection.close();
+        state.peerConnection = null;
+    }
+    if (state.audioElement) {
+        state.audioElement.srcObject = null;
+    }
+    if (elements.liveIndicator) {
+        elements.liveIndicator.style.display = 'none';
+    }
+    console.log('🔌 Conexión WebRTC cerrada');
+}
+
+// ============================================
+// EVENTOS DE SOCKET.IO
+// ============================================
+
+socket.on('estadisticas:actualizar', (data) => {
+    if (elements.listenersCount) {
+        elements.listenersCount.textContent = data.cantidadOyentes;
     }
 });
 
 socket.on('transmision:modo', (data) => {
-    console.log('Cambio de modo:', data);
+    console.log('📻 Cambio de modo:', data);
     if (data.estaEnVivo) {
-        indicadorEnVivo.style.display = 'block';
-        tituloCancion.textContent = "🔴 EN VIVO";
-        artistaCancion.textContent = "Escuchando transmisión...";
-        // El audio cambiará cuando llegue la oferta WebRTC (evento oferta-webrtc)
-    } else {
-        indicadorEnVivo.style.display = 'none';
-
-        // Si estábamos en vivo y terminó, limpiar conexión
-        if (conexionPar) {
-            conexionPar.close();
-            conexionPar = null;
+        if (elements.liveIndicator) {
+            elements.liveIndicator.style.display = 'block';
         }
-        elementoAudio.srcObject = null;
-
-        // Volverá a AutoDJ cuando llegue el siguiente 'cancion:actualizar' o si recargamos estado
-        tituloCancion.textContent = "Esperando señal...";
-        artistaCancion.textContent = "";
+        if (elements.songTitle) {
+            elements.songTitle.textContent = '🔴 EN VIVO';
+        }
+        if (elements.songArtist) {
+            elements.songArtist.textContent = 'Escuchando transmisión...';
+        }
+    } else {
+        limpiarConexion();
+        if (elements.songTitle) {
+            elements.songTitle.textContent = 'Esperando señal...';
+        }
+        if (elements.songArtist) {
+            elements.songArtist.textContent = '';
+        }
     }
 });
-
-// Cargar estado inicial y metadatos de la estación
-(async () => {
-    try {
-        const name = 'Mi Radio Online';
-        const description = 'La mejor música en vivo 24/7';
-        document.getElementById('station-name').textContent = name;
-        document.getElementById('station-description').textContent = description;
-    } catch (error) {
-        console.error('Error loading info:', error);
-    }
-})();
 
 // Limpieza al salir
 window.addEventListener('beforeunload', () => {
-    if (conexionPar) conexionPar.close();
+    limpiarConexion();
     socket.disconnect();
 });
+
+// ============================================
+// INICIAR AL CARGAR LA PÁGINA
+// ============================================
+document.addEventListener('DOMContentLoaded', inicializar);
