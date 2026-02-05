@@ -59,10 +59,18 @@ function inicializar() {
     const esMobil = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
     console.log('📱 Dispositivo móvil:', esMobil);
 
-    // Detectar interacción del usuario (MÚLTIPLES EVENTOS para móviles)
-    document.addEventListener('click', manejarInteraccionUsuario, { once: true });
-    document.addEventListener('touchstart', manejarInteraccionUsuario, { once: true });
-    document.addEventListener('touchend', manejarInteraccionUsuario, { once: true });
+    // Detectar interacción del usuario
+    // NO usar { once: true } en todos, puede interferir
+    const activarInteraccion = () => {
+        if (!state.userInteracted) {
+            manejarInteraccionUsuario();
+        }
+    };
+    
+    document.addEventListener('click', activarInteraccion);
+    document.addEventListener('touchstart', activarInteraccion);
+    
+    // Solo para teclado usamos once
     document.addEventListener('keydown', manejarInteraccionUsuario, { once: true });
 
     // Configurar botón de reproducción para móviles
