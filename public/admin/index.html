@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login - Radio Online</title>
+  <link rel="stylesheet" href="css/admin-styles.css">
+  <style>
+    .login-container {
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 1rem;
+    }
+
+    .login-card {
+      width: 100%;
+      max-width: 450px;
+      padding: 3rem;
+      animation: slideIn 0.5s ease;
+    }
+
+    .login-logo {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .login-logo-icon {
+      font-size: 4rem;
+      margin-bottom: 1rem;
+    }
+
+    .login-title {
+      font-size: 2rem;
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 0.5rem;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .login-subtitle {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 2rem;
+    }
+
+    .alert {
+      padding: 1rem;
+      border-radius: var(--radius-sm);
+      margin-bottom: 1rem;
+      font-weight: 500;
+    }
+
+    .alert-error {
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid var(--danger);
+      color: #fca5a5;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="login-container">
+    <div class="login-card glass-container">
+      <div class="login-logo">
+        <div class="login-logo-icon">🎵</div>
+        <h1 class="login-title">Panel Admin</h1>
+        <p class="login-subtitle">Inicia sesión para administrar tu estación</p>
+      </div>
+
+      <div id="error-message" style="display: none;" class="alert alert-error"></div>
+
+      <form id="login-form">
+        <div class="form-group">
+          <label class="form-label" for="username">Usuario</label>
+          <input type="text" id="username" class="form-input" placeholder="admin" required autocomplete="username">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Contraseña</label>
+          <input type="password" id="password" class="form-input" placeholder="••••••••" required
+            autocomplete="current-password">
+        </div>
+
+        <button type="submit" class="btn btn-primary" style="width: 100%;" id="login-btn">
+          <span id="login-text">Iniciar Sesión</span>
+          <span id="login-spinner" style="display: none;">
+            <div class="spinner" style="width: 20px; height: 20px; margin: 0;"></div>
+          </span>
+        </button>
+      </form>
+
+      <div class="text-center mt-2" style="color: var(--text-muted); font-size: 0.9rem;">
+        <p>Credenciales por defecto:</p>
+        <p style="margin-top: 0.5rem;">
+          <strong>Usuario:</strong> admin<br>
+          <strong>Contraseña:</strong> admin123
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const loginForm = document.getElementById('login-form');
+    const errorMessage = document.getElementById('error-message');
+    const loginBtn = document.getElementById('login-btn');
+    const loginText = document.getElementById('login-text');
+    const loginSpinner = document.getElementById('login-spinner');
+
+    function showError(message) {
+      errorMessage.textContent = message;
+      errorMessage.style.display = 'block';
+    }
+
+    function hideError() {
+      errorMessage.style.display = 'none';
+    }
+
+    loginForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hideError();
+
+      const username = document.getElementById('username').value;
+      const password = document.getElementById('password').value;
+
+      // Show loading state
+      loginBtn.disabled = true;
+      loginText.style.display = 'none';
+      loginSpinner.style.display = 'inline-block';
+
+      try {
+        const response = await fetch('/api/auth/iniciar-sesion', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ nombreUsuario: username, contrasena: password })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.exito) {
+          // Redirect to dashboard
+          window.location.href = '/admin/dashboard.html';
+        } else {
+          showError(data.error || 'Credenciales inválidas');
+        }
+      } catch (error) {
+        console.error('Login error:', error);
+        showError('Error de conexión. Por favor intenta de nuevo.');
+      } finally {
+        // Reset loading state
+        loginBtn.disabled = false;
+        loginText.style.display = 'inline-block';
+        loginSpinner.style.display = 'none';
+      }
+    });
+
+    // Check if already logged in
+    (async () => {
+      try {
+        const response = await fetch('/api/auth/verificar');
+        const data = await response.json();
+
+        if (data.autenticado) {
+          window.location.href = '/admin/dashboard.html';
+        }
+      } catch (error) {
+        console.error('Auth check error:', error);
+      }
+    })();
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestión de Música - Admin Panel</title>
+    <link rel="stylesheet" href="css/admin-styles.css">
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="navbar-brand">🎵 Radio Admin</div>
+        <div class="navbar-menu">
+            <a href="dashboard.html" class="nav-link">Dashboard</a>
+            <a href="live.html" class="nav-link">En Vivo</a>
+            <a href="music.html" class="nav-link active">Música</a>
+            <a href="playlists.html" class="nav-link">Playlists</a>
+            <button id="logout-btn" class="btn btn-danger" style="padding: 0.5rem 1rem;">Cerrar Sesión</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header flex-between">
+            <div>
+                <h1 class="page-title">Biblioteca de Música</h1>
+                <p class="page-subtitle">Administra tus archivos de audio</p>
+            </div>
+            <button class="btn btn-primary" onclick="document.getElementById('file-input').click()">
+                ⬆️ Subir MP3
+            </button>
+        </div>
+
+        <input type="file" id="file-input" accept=".mp3" style="display: none;" multiple>
+
+        <div id="upload-progress" style="display: none;" class="card mb-2">
+            <div class="card-body">
+                <div style="margin-bottom: 0.5rem;">Subiendo: <strong id="upload-filename">-</strong></div>
+                <div
+                    style="width: 100%; height: 20px; background: var(--bg-tertiary); border-radius: var(--radius-sm); overflow: hidden;">
+                    <div id="upload-bar"
+                        style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--secondary)); transition: width 300ms;">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header flex-between">
+                <h2 class="card-title">Canciones (<span id="song-count">0</span>)</h2>
+                <input type="text" class="form-input" placeholder="🔍 Buscar..." id="search-input"
+                    style="max-width: 300px;">
+            </div>
+            <div class="card-body">
+                <div id="songs-list">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+
+        (async () => {
+            const res = await fetch('/api/auth/verificar');
+            const data = await res.json();
+            if (!data.autenticado) window.location.href = '/admin/index.html';
+        })();
+
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await fetch('/api/auth/cerrar-sesion', { method: 'POST' });
+            window.location.href = '/admin/index.html';
+        });
+
+        let todasCanciones = [];
+
+        async function cargarCanciones() {
+            try {
+                const res = await fetch('/api/canciones');
+                const data = await res.json();
+                todasCanciones = data.canciones;
+                renderizarCanciones(todasCanciones);
+                document.getElementById('song-count').textContent = todasCanciones.length;
+            } catch (error) {
+                console.error('Error loading songs:', error);
+            }
+        }
+
+        function renderizarCanciones(canciones) {
+            const list = document.getElementById('songs-list');
+
+            if (canciones.length === 0) {
+                list.innerHTML = '<div style="text-align: center; padding: 2rem; color: var(--text-muted);">No hay canciones. ¡Sube tu primera canción!</div>';
+                return;
+            }
+
+            list.innerHTML = canciones.map(cancion => `
+        <div class="song-item" style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm); margin-bottom: 0.5rem;">
+          <div style="flex: 1;">
+            <div style="font-weight: 600; font-size: 1.1rem;">${cancion.titulo}</div>
+            <div style="color: var(--text-muted); font-size: 0.9rem;">${cancion.artista} • ${formatDuration(cancion.duracion)}</div>
+          </div>
+          <button class="btn btn-danger" onclick="eliminarCancion(${cancion.id}, '${cancion.titulo}')" style="padding: 0.5rem 1rem;">
+            🗑️ Eliminar
+          </button>
+        </div>
+      `).join('');
+        }
+
+        function formatDuration(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        document.getElementById('search-input').addEventListener('input', (e) => {
+            const query = e.target.value.toLowerCase();
+            const filtered = todasCanciones.filter(cancion =>
+                cancion.titulo.toLowerCase().includes(query) ||
+                cancion.artista.toLowerCase().includes(query)
+            );
+            renderizarCanciones(filtered);
+        });
+
+        document.getElementById('file-input').addEventListener('change', async (e) => {
+            const files = Array.from(e.target.files);
+
+            for (const file of files) {
+                const formData = new FormData();
+                formData.append('cancion', file);
+
+                document.getElementById('upload-progress').style.display = 'block';
+                document.getElementById('upload-filename').textContent = file.name;
+                document.getElementById('upload-bar').style.width = '50%';
+
+                try {
+                    const res = await fetch('/api/canciones/subir', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const data = await res.json();
+                    document.getElementById('upload-bar').style.width = '100%';
+
+                    if (data.exito) {
+                        setTimeout(() => {
+                            document.getElementById('upload-progress').style.display = 'none';
+                            document.getElementById('upload-bar').style.width = '0%';
+                            cargarCanciones();
+                        }, 500);
+                    } else {
+                        alert('Error al subir: ' + (data.error || 'Error desconocido'));
+                    }
+                } catch (error) {
+                    console.error('Upload error:', error);
+                    alert('Error al subir el archivo');
+                    document.getElementById('upload-progress').style.display = 'none';
+                }
+            }
+
+            e.target.value = '';
+        });
+
+        async function eliminarCancion(id, titulo) {
+            if (!confirm(`¿Eliminar "${titulo}"?`)) return;
+
+            try {
+                const res = await fetch(`/api/canciones/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+
+                if (data.exito) {
+                    cargarCanciones();
+                } else {
+                    alert('Error al eliminar');
+                }
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert('Error al eliminar');
+            }
+        }
+
+        cargarCanciones();
+    </script>
+</body>
+
+</html>

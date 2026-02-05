@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transmisión en Vivo - Admin Panel</title>
+    <link rel="stylesheet" href="css/admin-styles.css">
+    <style>
+        .audio-meter {
+            width: 100%;
+            height: 100px;
+            background: var(--bg-tertiary);
+            border-radius: var(--radius-md);
+            position: relative;
+            overflow: hidden;
+            margin: 1rem 0;
+        }
+
+        .audio-meter-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--success), var(--warning), var(--danger));
+            transition: width 100ms ease;
+        }
+
+        .live-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: var(--radius-md);
+            font-weight: 700;
+            font-size: 1.1rem;
+        }
+
+        .live-indicator.active {
+            background: var(--danger);
+            color: white;
+            animation: pulse 2s infinite;
+        }
+
+        .live-indicator.inactive {
+            background: var(--bg-tertiary);
+            color: var(--text-muted);
+        }
+
+        .live-dot {
+            width: 12px;
+            height: 12px;
+            background: white;
+            border-radius: 50%;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-brand">🎵 Radio Admin</div>
+        <div class="navbar-menu">
+            <a href="dashboard.html" class="nav-link">Dashboard</a>
+            <a href="live.html" class="nav-link active">En Vivo</a>
+            <a href="music.html" class="nav-link">Música</a>
+            <a href="playlists.html" class="nav-link">Playlists</a>
+            <button id="logout-btn" class="btn btn-danger" style="padding: 0.5rem 1rem;">Cerrar Sesión</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">Transmisión en Vivo</h1>
+            <p class="page-subtitle">Habla en vivo con tus oyentes</p>
+        </div>
+
+        <div class="grid grid-2">
+            <!-- Live Controls -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Controles de Transmisión</h2>
+                </div>
+                <div class="card-body">
+                    <div class="text-center mb-2">
+                        <div id="live-indicator" class="live-indicator inactive">
+                            <div class="live-dot"></div>
+                            <span>FUERA DEL AIRE</span>
+                        </div>
+                    </div>
+
+                    <div id="mic-section">
+                        <button id="enable-mic-btn" class="btn btn-primary" style="width: 100%; margin-bottom: 1rem;">
+                            🎤 Habilitar Micrófono
+                        </button>
+
+                        <div id="mic-controls" style="display: none;">
+                            <div class="audio-meter">
+                                <div id="audio-meter-fill" class="audio-meter-fill"></div>
+                            </div>
+
+                            <div class="flex gap-1">
+                                <button id="go-live-btn" class="btn btn-success" style="flex: 1;">
+                                    🔴 Salir en Vivo
+                                </button>
+                                <button id="stop-live-btn" class="btn btn-danger" style="flex: 1; display: none;">
+                                    ⏹️ Detener Transmisión
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-2"
+                        style="padding: 1rem; background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                        <div style="color: var(--text-muted); font-size: 0.9rem;">
+                            <strong>💡 Consejos:</strong>
+                            <ul style="margin-top: 0.5rem; margin-left: 1.5rem;">
+                                <li>Asegúrate de tener un micrófono conectado</li>
+                                <li>Habla claro y cerca del micrófono</li>
+                                <li>Mantén el volumen de entrada adecuado</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Estadísticas en Vivo</h2>
+                </div>
+                <div class="card-body">
+                    <div class="stat-card">
+                        <div class="stat-value" id="live-listeners">0</div>
+                        <div class="stat-label">👥 Oyentes Conectados</div>
+                    </div>
+
+                    <div class="mt-2">
+                        <h3 style="margin-bottom: 1rem; color: var(--text-secondary);">Modo Actual</h3>
+                        <div id="current-mode-display" class="badge badge-autodj"
+                            style="font-size: 1rem; padding: 0.5rem 1rem;">
+                            AutoDJ
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let streamMedios = null; // Stream del micrófono
+        let contextoAudio = null;
+        let analizador = null;
+        let estaEnVivo = false;
+
+        // Mapa para guardar las conexiones P2P con cada oyente
+        // Clave: ID del socket del oyente, Valor: RTCPeerConnection
+        const conexionesPares = new Map();
+
+        // Configuración de servidores STUN (públicos de Google)
+        const configRTC = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
+            ]
+        };
+
+        // Verificar autenticación
+        (async () => {
+            const res = await fetch('/api/auth/verificar');
+            const data = await res.json();
+            if (!data.autenticado) window.location.href = '/admin/index.html';
+        })();
+
+        // Cerrar sesión
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await fetch('/api/auth/cerrar-sesion', { method: 'POST' });
+            window.location.href = '/admin/index.html';
+        });
+
+        // 1. Habilitar Micrófono
+        document.getElementById('enable-mic-btn').addEventListener('click', async () => {
+            try {
+                // Pedir permisos de audio con cancelación de eco y supresión de ruido
+                streamMedios = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
+
+                // Configurar visualizador de audio (feedback visual para el locutor)
+                contextoAudio = new (window.AudioContext || window.webkitAudioContext)();
+                analizador = contextoAudio.createAnalyser();
+                const fuente = contextoAudio.createMediaStreamSource(streamMedios);
+                fuente.connect(analizador);
+                analizador.fftSize = 256;
+
+                // Mostrar controles
+                document.getElementById('enable-mic-btn').style.display = 'none';
+                document.getElementById('mic-controls').style.display = 'block';
+
+                // Iniciar visualización
+                visualizarAudio();
+            } catch (error) {
+                console.error('Error de micrófono:', error);
+                alert('No se pudo acceder al micrófono. Por favor permite el acceso.');
+            }
+        });
+
+        // Visualizador de niveles de audio
+        function visualizarAudio() {
+            if (!analizador) return;
+            const arrayDatos = new Uint8Array(analizador.frequencyBinCount);
+
+            function actualizar() {
+                analizador.getByteFrequencyData(arrayDatos);
+                const promedio = arrayDatos.reduce((a, b) => a + b) / arrayDatos.length;
+                const porcentaje = (promedio / 255) * 100;
+                document.getElementById('audio-meter-fill').style.width = porcentaje + '%';
+                requestAnimationFrame(actualizar);
+            }
+            actualizar();
+        }
+
+        // 2. Salir en VIVO
+        document.getElementById('go-live-btn').addEventListener('click', () => {
+            if (!streamMedios) return alert('¡Primero habilita el micrófono!');
+
+            estaEnVivo = true;
+
+            // Notificar al servidor e iniciar flujo
+            socket.emit('admin:vivo:iniciar'); // Webhook visual
+            socket.emit('transmisor-listo');   // Señalización WebRTC
+
+            // Pedir lista de oyentes que ya estaban conectados
+            socket.emit('obtener-oyentes-actuales');
+
+            // Actualizar UI
+            document.getElementById('go-live-btn').style.display = 'none';
+            document.getElementById('stop-live-btn').style.display = 'block';
+            const indicador = document.getElementById('live-indicator');
+            indicador.className = 'live-indicator active';
+            indicador.innerHTML = '<div class="live-dot"></div><span>EN VIVO</span>';
+            console.log('🔴 Transmisión iniciada');
+        });
+
+        // 3. Detener Transmisión
+        document.getElementById('stop-live-btn').addEventListener('click', () => {
+            estaEnVivo = false;
+            socket.emit('admin:vivo:detener');
+
+            // Cerrar todas las conexiones P2P
+            conexionesPares.forEach((pc) => pc.close());
+            conexionesPares.clear();
+
+            // Actualizar UI
+            document.getElementById('go-live-btn').style.display = 'block';
+            document.getElementById('stop-live-btn').style.display = 'none';
+            const indicador = document.getElementById('live-indicator');
+            indicador.className = 'live-indicator inactive';
+            indicador.innerHTML = '<div class="live-dot"></div><span>FUERA DEL AIRE</span>';
+            console.log('⏹️ Transmisión detenida');
+        });
+
+        // ==========================================
+        // LÓGICA WEBRTC (El corazón de la radio P2P)
+        // ==========================================
+
+        // A. Recibir lista de oyentes actuales y conectar con ellos
+        socket.on('oyentes-actuales', (idsOyentes) => {
+            console.log('👥 Oyentes actuales recibidos:', idsOyentes);
+            if (estaEnVivo && streamMedios) {
+                idsOyentes.forEach(id => crearConexionPar(id));
+            }
+        });
+
+        // B. Nuevo oyente se conecta durante la transmisión
+        socket.on('nuevo-oyente', (idOyente) => {
+            console.log('👤 Nuevo oyente detectado:', idOyente);
+            if (estaEnVivo && streamMedios) {
+                crearConexionPar(idOyente);
+            }
+        });
+
+        // C. Oyente se desconecta -> Limpiar conexión
+        socket.on('oyente-desconectado', (idOyente) => {
+            if (conexionesPares.has(idOyente)) {
+                conexionesPares.get(idOyente).close();
+                conexionesPares.delete(idOyente);
+                console.log('❌ Conexión cerrada con:', idOyente);
+            }
+        });
+
+        // D. Función principal: Crear conexión P2P con un oyente
+        async function crearConexionPar(idOyente) {
+            if (conexionesPares.has(idOyente)) return; // Ya existe
+
+            try {
+                const pc = new RTCPeerConnection(configRTC);
+
+                // Agregar el audio del micrófono a la conexión
+                streamMedios.getTracks().forEach(track => pc.addTrack(track, streamMedios));
+
+                // Manejo de Candidatos ICE (Información de red para conectar)
+                pc.onicecandidate = (evento) => {
+                    if (evento.candidate) {
+                        socket.emit('candidato-ice-webrtc', {
+                            candidato: evento.candidate,
+                            para: idOyente
+                        });
+                    }
+                };
+
+                // Crear OFERTA para invitar al oyente a escuchar
+                const oferta = await pc.createOffer();
+                await pc.setLocalDescription(oferta);
+
+                // Enviar la oferta al oyente a través del servidor
+                socket.emit('oferta-webrtc', {
+                    oferta: oferta,
+                    para: idOyente
+                });
+
+                // Guardar la conexión
+                conexionesPares.set(idOyente, pc);
+                console.log('📡 Conexión iniciada con oyente:', idOyente);
+
+            } catch (error) {
+                console.error('Error al crear conexión P2P:', error);
+            }
+        }
+
+        // E. Recibir RESPUESTA del oyente
+        socket.on('respuesta-webrtc', async (data) => {
+            const { respuesta, de } = data;
+            const pc = conexionesPares.get(de);
+            if (pc) {
+                try {
+                    await pc.setRemoteDescription(new RTCSessionDescription(respuesta));
+                    console.log('✅ Respuesta recibida y configurada de:', de);
+                } catch (e) {
+                    console.error('Error configurando respuesta:', e);
+                }
+            }
+        });
+
+        // F. Recibir Candidatos ICE del oyente
+        socket.on('candidato-ice-webrtc', async (data) => {
+            const { candidato, de } = data;
+            const pc = conexionesPares.get(de);
+            if (pc) {
+                try {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidato));
+                } catch (e) {
+                    console.error('Error agregando candidato ICE:', e);
+                }
+            }
+        });
+
+        // Estadísticas UI
+        socket.on('estadisticas:actualizar', (data) => {
+            document.getElementById('live-listeners').textContent = data.cantidadOyentes;
+        });
+
+        socket.on('transmision:modo', (data) => {
+            const badge = document.getElementById('current-mode-display');
+            if (data.estaEnVivo) {
+                badge.className = 'badge badge-live';
+                badge.textContent = 'EN VIVO';
+            } else {
+                badge.className = 'badge badge-autodj';
+                badge.textContent = 'AutoDJ';
+            }
+        });
+    </script>
+</body>
+
+</html>

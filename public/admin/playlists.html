@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Playlists - Admin Panel</title>
+    <link rel="stylesheet" href="css/admin-styles.css">
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="navbar-brand">🎵 Radio Admin</div>
+        <div class="navbar-menu">
+            <a href="dashboard.html" class="nav-link">Dashboard</a>
+            <a href="live.html" class="nav-link">En Vivo</a>
+            <a href="music.html" class="nav-link">Música</a>
+            <a href="playlists.html" class="nav-link active">Playlists</a>
+            <button id="logout-btn" class="btn btn-danger" style="padding: 0.5rem 1rem;">Cerrar Sesión</button>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="page-header flex-between">
+            <div>
+                <h1 class="page-title">Playlists</h1>
+                <p class="page-subtitle">Organiza tu música para el AutoDJ</p>
+            </div>
+            <button class="btn btn-primary" id="new-playlist-btn">➕ Nueva Playlist</button>
+        </div>
+
+        <div class="grid grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <h2 class="card-title">Mis Playlists</h2>
+                </div>
+                <div class="card-body">
+                    <div id="playlists-list">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" id="playlist-detail" style="display: none;">
+                <div class="card-header flex-between">
+                    <h2 class="card-title" id="playlist-name">-</h2>
+                    <div class="flex gap-1">
+                        <button class="btn btn-success" id="set-active-btn" style="padding: 0.5rem 1rem;">✓ Activar
+                            AutoDJ</button>
+                        <button class="btn btn-danger" id="delete-playlist-btn"
+                            style="padding: 0.5rem 1rem;">🗑️</button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div style="margin-bottom: 1rem;">
+                        <button class="btn btn-primary" id="add-song-btn">➕ Agregar Canción</button>
+                    </div>
+                    <div id="playlist-songs">
+                        <p style="color: var(--text-muted);">Esta playlist está vacía</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for new playlist -->
+    <div id="new-playlist-modal"
+        style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:1000;justify-content:center;align-items:center;">
+        <div class="card" style="max-width:500px;width:90%;">
+            <div class="card-header">
+                <h2 class="card-title">Nueva Playlist</h2>
+            </div>
+            <div class="card-body">
+                <div class="form-group">
+                    <label class="form-label">Nombre</label>
+                    <input type="text" id="playlist-name-input" class="form-input" placeholder="Mi Playlist">
+                </div>
+                <div class="flex gap-1">
+                    <button class="btn btn-primary" id="create-playlist-btn" style="flex:1;">Crear</button>
+                    <button class="btn btn-outline" id="cancel-playlist-btn" style="flex:1;">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for adding songs -->
+    <div id="add-song-modal"
+        style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:1000;justify-content:center;align-items:center;overflow-y:auto;">
+        <div class="card" style="max-width:600px;width:90%;max-height:80vh;overflow-y:auto;">
+            <div class="card-header">
+                <h2 class="card-title">Agregar Canciones</h2>
+            </div>
+            <div class="card-body">
+                <div id="available-songs">
+                    <div class="spinner"></div>
+                </div>
+                <button class="btn btn-outline mt-2" id="close-add-song-btn" style="width:100%;">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let listas = [];
+        let listaActualId = null;
+        let todasCanciones = [];
+
+        (async () => {
+            const res = await fetch('/api/auth/verificar');
+            const data = await res.json();
+            if (!data.autenticado) window.location.href = '/admin/index.html';
+        })();
+
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await fetch('/api/auth/cerrar-sesion', { method: 'POST' });
+            window.location.href = '/admin/index.html';
+        });
+
+        async function cargarListas() {
+            const res = await fetch('/api/listas');
+            const data = await res.json();
+            listas = data.listas;
+            renderizarListas();
+        }
+
+        function renderizarListas() {
+            const list = document.getElementById('playlists-list');
+            if (listas.length === 0) {
+                list.innerHTML = '<p style="color:var(--text-muted);text-align:center;">No hay playlists</p>';
+                return;
+            }
+            list.innerHTML = listas.map(p => `
+        <div class="song-item" style="padding:1rem;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:0.5rem;cursor:pointer;" onclick="seleccionarLista(${p.id})">
+          <div style="font-weight:600;font-size:1.1rem;">${p.nombre} ${p.esta_activa ? '<span class="badge badge-success">Activa</span>' : ''}</div>
+          <div style="color:var(--text-muted);font-size:0.9rem;">${p.cantidadCanciones} canciones</div>
+        </div>
+      `).join('');
+        }
+
+        async function seleccionarLista(id) {
+            listaActualId = id;
+            const res = await fetch(`/api/listas/${id}`);
+            const data = await res.json();
+
+            document.getElementById('playlist-detail').style.display = 'block';
+            document.getElementById('playlist-name').textContent = data.lista.nombre;
+
+            if (data.lista.canciones.length === 0) {
+                document.getElementById('playlist-songs').innerHTML = '<p style="color:var(--text-muted);">Esta playlist está vacía</p>';
+            } else {
+                document.getElementById('playlist-songs').innerHTML = data.lista.canciones.map((s, idx) => `
+          <div class="song-item" style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:0.5rem;">
+            <div>
+              <div style="font-weight:600;">${s.titulo}</div>
+              <div style="color:var(--text-muted);font-size:0.9rem;">${s.artista}</div>
+            </div>
+            <button class="btn btn-danger" onclick="eliminarCancion(${s.id})" style="padding:0.25rem 0.75rem;">✕</button>
+          </div>
+        `).join('');
+            }
+        }
+
+        document.getElementById('new-playlist-btn').addEventListener('click', () => {
+            document.getElementById('new-playlist-modal').style.display = 'flex';
+        });
+
+        document.getElementById('cancel-playlist-btn').addEventListener('click', () => {
+            document.getElementById('new-playlist-modal').style.display = 'none';
+        });
+
+        document.getElementById('create-playlist-btn').addEventListener('click', async () => {
+            const name = document.getElementById('playlist-name-input').value;
+            if (!name) return alert('Ingresa un nombre');
+
+            const res = await fetch('/api/listas', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ nombre: name })
+            });
+
+            const data = await res.json();
+            if (data.exito) {
+                document.getElementById('new-playlist-modal').style.display = 'none';
+                document.getElementById('playlist-name-input').value = '';
+                cargarListas();
+            }
+        });
+
+        document.getElementById('add-song-btn').addEventListener('click', async () => {
+            const res = await fetch('/api/canciones');
+            const data = await res.json();
+            todasCanciones = data.canciones;
+
+            document.getElementById('available-songs').innerHTML = todasCanciones.map(s => `
+        <div class="song-item" style="display:flex;justify-content:space-between;align-items:center;padding:0.75rem;background:var(--bg-tertiary);border-radius:var(--radius-sm);margin-bottom:0.5rem;">
+          <div>
+            <div style="font-weight:600;">${s.titulo}</div>
+            <div style="color:var(--text-muted);font-size:0.9rem;">${s.artista}</div>
+          </div>
+          <button class="btn btn-primary" onclick="agregarCancionALista(${s.id})" style="padding:0.25rem 0.75rem;">➕</button>
+        </div>
+      `).join('');
+
+            document.getElementById('add-song-modal').style.display = 'flex';
+        });
+
+        document.getElementById('close-add-song-btn').addEventListener('click', () => {
+            document.getElementById('add-song-modal').style.display = 'none';
+        });
+
+        async function agregarCancionALista(cancionId) {
+            const res = await fetch(`/api/listas/${listaActualId}/canciones`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cancionId })
+            });
+
+            const data = await res.json();
+            if (data.exito) {
+                seleccionarLista(listaActualId);
+                document.getElementById('add-song-modal').style.display = 'none';
+            }
+        }
+
+        async function eliminarCancion(cancionId) {
+            const res = await fetch(`/api/listas/${listaActualId}/canciones/${cancionId}`, { method: 'DELETE' });
+            const data = await res.json();
+            if (data.exito) seleccionarLista(listaActualId);
+        }
+
+        document.getElementById('set-active-btn').addEventListener('click', async () => {
+            const res = await fetch(`/api/listas/${listaActualId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ estaActiva: true })
+            });
+
+            if ((await res.json()).exito) {
+                socket.emit('admin:autodj:iniciar', { listaId: listaActualId });
+                cargarListas();
+                seleccionarLista(listaActualId);
+            }
+        });
+
+        document.getElementById('delete-playlist-btn').addEventListener('click', async () => {
+            if (!confirm('¿Eliminar esta playlist?')) return;
+            const res = await fetch(`/api/listas/${listaActualId}`, { method: 'DELETE' });
+            if ((await res.json()).exito) {
+                document.getElementById('playlist-detail').style.display = 'none';
+                cargarListas();
+            }
+        });
+
+        cargarListas();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Admin Panel</title>
+    <link rel="stylesheet" href="css/admin-styles.css">
+</head>
+
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <div class="navbar-brand">🎵 Radio Admin</div>
+        <div class="navbar-menu">
+            <a href="dashboard.html" class="nav-link active">Dashboard</a>
+            <a href="live.html" class="nav-link">En Vivo</a>
+            <a href="music.html" class="nav-link">Música</a>
+            <a href="playlists.html" class="nav-link">Playlists</a>
+            <button id="logout-btn" class="btn btn-danger" style="padding: 0.5rem 1rem;">
+                Cerrar Sesión
+            </button>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="container">
+        <div class="page-header">
+            <h1 class="page-title">Dashboard</h1>
+            <p class="page-subtitle">Resumen general de tu estación de radio</p>
+        </div>
+
+        <!-- Stats Grid -->
+        <div class="grid grid-3 mb-2">
+            <div class="stat-card fade-in">
+                <div class="stat-value" id="listener-count">0</div>
+                <div class="stat-label">👥 Oyentes Conectados</div>
+            </div>
+
+            <div class="stat-card fade-in" style="animation-delay: 0.1s;">
+                <div class="stat-value" id="total-songs">0</div>
+                <div class="stat-label">🎵 Canciones en Biblioteca</div>
+            </div>
+
+            <div class="stat-card fade-in" style="animation-delay: 0.2s;">
+                <div class="stat-value" id="total-playlists">0</div>
+                <div class="stat-label">📋 Playlists Creadas</div>
+            </div>
+        </div>
+
+        <!-- Current Status -->
+        <div class="grid grid-2">
+            <!-- Status Card -->
+            <div class="card fade-in" style="animation-delay: 0.3s;">
+                <div class="card-header flex-between">
+                    <h2 class="card-title">Estado Actual</h2>
+                    <span id="status-badge" class="badge badge-autodj">AutoDJ</span>
+                </div>
+                <div class="card-body">
+                    <div style="margin-bottom: 1rem;">
+                        <div style="color: var(--text-muted); margin-bottom: 0.5rem;">Modo:</div>
+                        <div style="font-size: 1.2rem; font-weight: 600;" id="current-mode">AutoDJ</div>
+                    </div>
+
+                    <div style="margin-bottom: 1rem;">
+                        <div style="color: var(--text-muted); margin-bottom: 0.5rem;">Reproduciendo ahora:</div>
+                        <div style="font-size: 1.2rem; font-weight: 600;" id="current-song">-</div>
+                        <div style="color: var(--text-secondary); margin-top: 0.25rem;" id="current-artist">-</div>
+                    </div>
+
+                    <div class="flex gap-1 mt-2">
+                        <a href="live.html" class="btn btn-success">
+                            🎤 Ir en Vivo
+                        </a>
+                        <a href="playlists.html" class="btn btn-primary">
+                            ⚙️ Configurar AutoDJ
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quick Actions -->
+            <div class="card fade-in" style="animation-delay: 0.4s;">
+                <div class="card-header">
+                    <h2 class="card-title">Acciones Rápidas</h2>
+                </div>
+                <div class="card-body">
+                    <div style="display: flex; flex-direction: column; gap: 1rem;">
+                        <a href="music.html" class="btn btn-primary" style="justify-content: center;">
+                            ⬆️ Subir Nueva Canción
+                        </a>
+                        <a href="playlists.html" class="btn btn-secondary" style="justify-content: center;">
+                            ➕ Crear Nueva Playlist
+                        </a>
+                        <a href="live.html" class="btn btn-success" style="justify-content: center;">
+                            🔴 Iniciar Transmisión en Vivo
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Socket.IO connection
+        const socket = io();
+
+        // Check authentication
+        (async () => {
+            try {
+                const response = await fetch('/api/auth/verificar');
+                const data = await response.json();
+
+                if (!data.autenticado) {
+                    window.location.href = '/admin/index.html';
+                }
+            } catch (error) {
+                console.error('Auth check error:', error);
+                window.location.href = '/admin/index.html';
+            }
+        })();
+
+        // Logout
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            try {
+                await fetch('/api/auth/cerrar-sesion', { method: 'POST' });
+                window.location.href = '/admin/index.html';
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+        });
+
+        // Load dashboard data
+        async function loadDashboard() {
+            try {
+                // Get stats
+                const [cancionesRes, listasRes, estadoRes] = await Promise.all([
+                    fetch('/api/canciones'),
+                    fetch('/api/listas'),
+                    fetch('/api/transmision/estado')
+                ]);
+
+                const canciones = await cancionesRes.json();
+                const listas = await listasRes.json();
+                const estado = await estadoRes.json();
+
+                // Update stats
+                document.getElementById('total-songs').textContent = canciones.canciones.length;
+                document.getElementById('total-playlists').textContent = listas.listas.length;
+
+                // Update status
+                const statusBadge = document.getElementById('status-badge');
+                const currentMode = document.getElementById('current-mode');
+
+                if (estado.estado.estaEnVivo) {
+                    statusBadge.className = 'badge badge-live';
+                    statusBadge.textContent = 'EN VIVO';
+                    currentMode.textContent = 'Transmisión en Vivo';
+                } else {
+                    statusBadge.className = 'badge badge-autodj';
+                    statusBadge.textContent = 'AutoDJ';
+                    currentMode.textContent = 'AutoDJ';
+                }
+
+                // Update current song
+                if (estado.estado.cancionActual) {
+                    document.getElementById('current-song').textContent = estado.estado.cancionActual.titulo;
+                    document.getElementById('current-artist').textContent = estado.estado.cancionActual.artista;
+                } else {
+                    document.getElementById('current-song').textContent = 'Ninguna';
+                    document.getElementById('current-artist').textContent = '';
+                }
+            } catch (error) {
+                console.error('Error loading dashboard:', error);
+            }
+        }
+
+        // Real-time updates
+        socket.on('estadisticas:actualizar', (data) => {
+            document.getElementById('listener-count').textContent = data.cantidadOyentes;
+        });
+
+        socket.on('cancion:actualizar', (data) => {
+            if (data.cancion) {
+                document.getElementById('current-song').textContent = data.cancion.titulo;
+                document.getElementById('current-artist').textContent = data.cancion.artista;
+            }
+        });
+
+        socket.on('transmision:modo', (data) => {
+            const statusBadge = document.getElementById('status-badge');
+            const currentMode = document.getElementById('current-mode');
+
+            if (data.estaEnVivo) {
+                statusBadge.className = 'badge badge-live';
+                statusBadge.textContent = 'EN VIVO';
+                currentMode.textContent = 'Transmisión en Vivo';
+            } else {
+                statusBadge.className = 'badge badge-autodj';
+                statusBadge.textContent = 'AutoDJ';
+                currentMode.textContent = 'AutoDJ';
+            }
+        });
+
+        // Initial load
+        loadDashboard();
+    </script>
+</body>
+
+</html>
