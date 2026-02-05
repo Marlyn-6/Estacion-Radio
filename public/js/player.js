@@ -86,9 +86,9 @@ function inicializar() {
 
     // Configurar botón móvil específicamente
     if (elements.mobilePlayBtn) {
-        elements.mobilePlayBtn.addEventListener('click', manejarInteraccionUsuario);
-        elements.mobilePlayBtn.addEventListener('touchstart', manejarInteraccionUsuario);
-        console.log('✅ Botón móvil configurado');
+        elements.mobilePlayBtn.addEventListener('click', manejarClickBotonMovil);
+        elements.mobilePlayBtn.addEventListener('touchstart', manejarClickBotonMovil);
+        mostrarDebug('✅ Botón móvil configurado');
     }
 
     // Notificar al servidor que somos un oyente
@@ -109,40 +109,44 @@ function ajustarCanvas() {
 // INTERACCIÓN DEL USUARIO (Política de Autoplay)
 // ============================================
 
+// Manejador ESPECÍFICO para el botón móvil
+function manejarClickBotonMovil(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    mostrarDebug('🔵 BOTÓN TOCADO - Reproduciendo AHORA');
+    
+    state.userInteracted = true;
+    
+    // Eliminar botón inmediatamente
+    if (elements.mobilePlayBtn) {
+        elements.mobilePlayBtn.style.display = 'none';
+        elements.mobilePlayBtn.remove();
+        mostrarDebug('🗑️ Botón eliminado');
+    }
+    
+    // Reanudar AudioContext
+    if (state.audioContext && state.audioContext.state === 'suspended') {
+        state.audioContext.resume();
+    }
+    
+    // Reproducir INMEDIATAMENTE con esta interacción fresca
+    reproducirStreamInmediato();
+}
+
 function manejarInteraccionUsuario() {
     if (!state.userInteracted) {
         state.userInteracted = true;
-        mostrarDebug('✅ Usuario interactuó - Autoplay habilitado');
-
-        // Ocultar botón móvil si está visible (PERMANENTEMENTE)
-        if (elements.mobilePlayBtn) {
-            elements.mobilePlayBtn.style.display = 'none';
-            elements.mobilePlayBtn.remove(); // Eliminar completamente del DOM
-            mostrarDebug('🗑️ Botón eliminado');
-        }
+        mostrarDebug('✅ Usuario interactuó');
 
         // Reanudar AudioContext si está suspendido
         if (state.audioContext && state.audioContext.state === 'suspended') {
             state.audioContext.resume();
-            mostrarDebug('🔊 AudioContext reanudado');
         }
 
-        // Asegurar que el audio no esté muted
-        if (state.audioElement) {
-            state.audioElement.muted = false;
-            mostrarDebug('🔇 Unmuted confirmado');
-        }
-
-        // NUEVO: Intentar reproducir inmediatamente si ya hay stream
-        if (state.audioElement && state.audioElement.srcObject) {
-            mostrarDebug('🎵 Intentando reproducir stream existente...');
-            reproducirStreamPendiente();
-        }
-
-        // Reproducir stream pendiente si existe
-        if (state.pendingStream) {
-            mostrarDebug('🎵 Reproduciendo stream pendiente...');
-            reproducirStreamPendiente();
+        // Reproducir si hay stream pendiente
+        if (state.pendingStream || (state.audioElement && state.audioElement.srcObject)) {
+            reproducirStreamInmediato();
         }
     }
 }
@@ -188,19 +192,20 @@ async function manejarOferta(oferta, de) {
                         elements.songArtist.textContent = 'Transmisión en directo';
                     }
 
+                    // Guardar stream como pendiente
+                    state.pendingStream = stream;
+                    
                     // Reproducir automáticamente si el usuario ya interactuó
                     if (state.userInteracted) {
                         mostrarDebug('✅ Usuario ya interactuó, reproduciendo...');
-                        reproducirStreamPendiente();
+                        reproducirStreamInmediato();
                     } else {
-                        // Guardar como pendiente
-                        state.pendingStream = stream;
-                        mostrarDebug('⏳ Esperando interacción...');
+                        mostrarDebug('⏳ Stream listo, esperando toque...');
                         
-                        // Mostrar botón móvil "Toca para Escuchar"
+                        // Mostrar botón AHORA que el stream está listo
                         if (elements.mobilePlayBtn) {
                             elements.mobilePlayBtn.style.display = 'block';
-                            mostrarDebug('🔵 Botón visible - TOCA AQUÍ');
+                            mostrarDebug('🔵 BOTÓN VISIBLE - Toca para escuchar');
                         }
                     }
                 }
@@ -331,60 +336,61 @@ function dibujarVisualizador() {
 // REPRODUCCIÓN DE AUDIO
 // ============================================
 
-function reproducirStreamPendiente() {
+// Reproducir inmediatamente con interacción fresca
+function reproducirStreamInmediato() {
     if (!state.audioElement || !state.audioElement.srcObject) {
-        mostrarDebug('⚠️ No hay stream para reproducir');
+        mostrarDebug('⚠️ No hay stream');
         return;
     }
 
-    // TRUCO PARA MÓVILES: Reproducir muted primero (siempre funciona)
-    // y luego unmutear (esto evita el NotAllowedError)
-    state.audioElement.muted = true;
+    // Configurar volumen
     if (state.audioElement.volume < 0.1) {
         state.audioElement.volume = 0.7;
     }
 
-    mostrarDebug('▶️ Reproduciendo MUTED primero...');
+    // ESTRATEGIA: Muted primero, unmute después
+    state.audioElement.muted = true;
+    mostrarDebug('▶️ Play con muted=true...');
+    
     state.audioElement.play()
         .then(() => {
-            mostrarDebug('✅ Play exitoso (muted)');
+            mostrarDebug('✅ Play exitoso');
             
-            // UNMUTEAR después de 100ms (esto SÍ funciona en móviles)
+            // Unmutear después de un momento
             setTimeout(() => {
                 state.audioElement.muted = false;
-                mostrarDebug('🔊 UNMUTED - AUDIO DEBERÍA SONAR AHORA');
-                mostrarDebug('📊 Vol: ' + state.audioElement.volume + ', Muted: ' + state.audioElement.muted);
-            }, 100);
-            
-            state.pendingStream = null;
-            
-            // Verificar después de 1 segundo
-            setTimeout(() => {
-                if (!state.audioElement.paused) {
-                    mostrarDebug('✅ Audio activo confirmado');
-                } else {
-                    mostrarDebug('⚠️ Audio pausado');
-                }
-            }, 1000);
+                mostrarDebug('🔊 UNMUTED - Vol: ' + state.audioElement.volume);
+                state.pendingStream = null;
+                
+                // Verificar
+                setTimeout(() => {
+                    if (!state.audioElement.paused) {
+                        mostrarDebug('✅ AUDIO FUNCIONANDO');
+                    } else {
+                        mostrarDebug('⚠️ Audio pausado');
+                    }
+                }, 500);
+            }, 200);
         })
         .catch(err => {
-            mostrarDebug('❌ Error: ' + err.name);
+            mostrarDebug('❌ Error muted: ' + err.name);
             
-            // Si falla, intentar SIN muted (para navegadores de escritorio)
-            mostrarDebug('🔄 Reintentando sin muted...');
+            // Intentar sin muted
             state.audioElement.muted = false;
             state.audioElement.play()
                 .then(() => {
-                    mostrarDebug('✅ Segundo intento exitoso');
+                    mostrarDebug('✅ Play sin muted OK');
                     state.pendingStream = null;
                 })
                 .catch(err2 => {
-                    mostrarDebug('❌ Segundo intento falló: ' + err2.name);
-                    if (state.audioElement.srcObject) {
-                        state.pendingStream = state.audioElement.srcObject;
-                    }
+                    mostrarDebug('❌ Falló todo: ' + err2.name);
                 });
         });
+}
+
+// Función legacy para otros usos
+function reproducirStreamPendiente() {
+    reproducirStreamInmediato();
 }
 
 // ============================================
