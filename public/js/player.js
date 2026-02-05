@@ -337,35 +337,53 @@ function reproducirStreamPendiente() {
         return;
     }
 
-    // Asegurar que NO esté muted y el volumen sea audible
-    state.audioElement.muted = false;
+    // TRUCO PARA MÓVILES: Reproducir muted primero (siempre funciona)
+    // y luego unmutear (esto evita el NotAllowedError)
+    state.audioElement.muted = true;
     if (state.audioElement.volume < 0.1) {
         state.audioElement.volume = 0.7;
-        mostrarDebug('🔊 Volumen ajustado a 0.7');
     }
 
-    mostrarDebug('▶️ Reproduciendo... vol=' + state.audioElement.volume);
+    mostrarDebug('▶️ Reproduciendo MUTED primero...');
     state.audioElement.play()
         .then(() => {
-            mostrarDebug('✅ AUDIO FUNCIONANDO');
-            mostrarDebug('📊 Paused: ' + state.audioElement.paused + ', Vol: ' + state.audioElement.volume + ', Muted: ' + state.audioElement.muted);
+            mostrarDebug('✅ Play exitoso (muted)');
+            
+            // UNMUTEAR después de 100ms (esto SÍ funciona en móviles)
+            setTimeout(() => {
+                state.audioElement.muted = false;
+                mostrarDebug('🔊 UNMUTED - AUDIO DEBERÍA SONAR AHORA');
+                mostrarDebug('📊 Vol: ' + state.audioElement.volume + ', Muted: ' + state.audioElement.muted);
+            }, 100);
+            
             state.pendingStream = null;
             
-            // Verificar después de 1 segundo si realmente está reproduciendo
+            // Verificar después de 1 segundo
             setTimeout(() => {
                 if (!state.audioElement.paused) {
-                    mostrarDebug('✅ Confirmado: Audio activo');
+                    mostrarDebug('✅ Audio activo confirmado');
                 } else {
-                    mostrarDebug('⚠️ Audio pausado inesperadamente');
+                    mostrarDebug('⚠️ Audio pausado');
                 }
             }, 1000);
         })
         .catch(err => {
             mostrarDebug('❌ Error: ' + err.name);
-            // Guardar para intentar más tarde
-            if (state.audioElement.srcObject) {
-                state.pendingStream = state.audioElement.srcObject;
-            }
+            
+            // Si falla, intentar SIN muted (para navegadores de escritorio)
+            mostrarDebug('🔄 Reintentando sin muted...');
+            state.audioElement.muted = false;
+            state.audioElement.play()
+                .then(() => {
+                    mostrarDebug('✅ Segundo intento exitoso');
+                    state.pendingStream = null;
+                })
+                .catch(err2 => {
+                    mostrarDebug('❌ Segundo intento falló: ' + err2.name);
+                    if (state.audioElement.srcObject) {
+                        state.pendingStream = state.audioElement.srcObject;
+                    }
+                });
         });
 }
 
