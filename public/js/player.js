@@ -33,7 +33,8 @@ const elements = {
     songArtist: document.getElementById('song-artist'),
     listenersCount: document.getElementById('listener-count'),
     liveIndicator: document.getElementById('live-indicator'),
-    visualizer: document.getElementById('visualizer')
+    visualizer: document.getElementById('visualizer'),
+    mobilePlayBtn: document.getElementById('mobile-play-btn')
 };
 
 // ============================================
@@ -53,9 +54,11 @@ function inicializar() {
     ajustarCanvas();
     window.addEventListener('resize', ajustarCanvas);
 
-    // Detectar interacción del usuario
-    document.addEventListener('click', manejarInteraccionUsuario, { once: true });
-    document.addEventListener('keydown', manejarInteraccionUsuario, { once: true });
+    // Detectar interacción del usuario (incluyendo eventos táctiles para móviles)
+    document.addEventListener('click', manejarInteraccionUsuario);
+    document.addEventListener('keydown', manejarInteraccionUsuario);
+    document.addEventListener('touchstart', manejarInteraccionUsuario); // Para móviles
+    document.addEventListener('touchend', manejarInteraccionUsuario);   // Para móviles
 
     // Configurar controles
     configurarControles();
@@ -83,9 +86,19 @@ function manejarInteraccionUsuario() {
         state.userInteracted = true;
         console.log('✅ Usuario interactuó - Autoplay habilitado');
 
+        // Ocultar botón móvil si está visible
+        if (elements.mobilePlayBtn) {
+            elements.mobilePlayBtn.style.display = 'none';
+        }
+
         // Reanudar AudioContext si está suspendido
         if (state.audioContext && state.audioContext.state === 'suspended') {
             state.audioContext.resume();
+        }
+
+        // NUEVO: Intentar reproducir inmediatamente si ya hay stream
+        if (state.audioElement && state.audioElement.srcObject) {
+            reproducirStreamPendiente();
         }
 
         // Reproducir stream pendiente si existe
@@ -141,6 +154,11 @@ async function manejarOferta(oferta, de) {
                         // Guardar como pendiente
                         state.pendingStream = stream;
                         console.log('⏳ Stream guardado, esperando interacción del usuario...');
+                        
+                        // Mostrar botón móvil "Toca para Escuchar"
+                        if (elements.mobilePlayBtn) {
+                            elements.mobilePlayBtn.style.display = 'block';
+                        }
                     }
                 }
             };
