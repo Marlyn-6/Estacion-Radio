@@ -65,7 +65,11 @@ function inicializar() {
     state.audioElement.controls = false;
     state.audioElement.style.display = 'none';
     state.audioElement.volume = state.currentVolume;
+    state.audioElement.muted = false; // Asegurar que NO esté muted
+    state.audioElement.playsInline = true; // Importante para iOS/móviles
     document.body.appendChild(state.audioElement);
+    
+    mostrarDebug('🔧 AudioElement creado: vol=' + state.audioElement.volume + ', muted=' + state.audioElement.muted);
 
     // Configurar canvas del visualizador
     ajustarCanvas();
@@ -110,15 +114,23 @@ function manejarInteraccionUsuario() {
         state.userInteracted = true;
         mostrarDebug('✅ Usuario interactuó - Autoplay habilitado');
 
-        // Ocultar botón móvil si está visible
+        // Ocultar botón móvil si está visible (PERMANENTEMENTE)
         if (elements.mobilePlayBtn) {
             elements.mobilePlayBtn.style.display = 'none';
+            elements.mobilePlayBtn.remove(); // Eliminar completamente del DOM
+            mostrarDebug('🗑️ Botón eliminado');
         }
 
         // Reanudar AudioContext si está suspendido
         if (state.audioContext && state.audioContext.state === 'suspended') {
             state.audioContext.resume();
             mostrarDebug('🔊 AudioContext reanudado');
+        }
+
+        // Asegurar que el audio no esté muted
+        if (state.audioElement) {
+            state.audioElement.muted = false;
+            mostrarDebug('🔇 Unmuted confirmado');
         }
 
         // NUEVO: Intentar reproducir inmediatamente si ya hay stream
@@ -159,6 +171,8 @@ async function manejarOferta(oferta, de) {
                 // Asignar stream al elemento de audio
                 if (state.audioElement) {
                     state.audioElement.srcObject = stream;
+                    state.audioElement.muted = false; // Asegurar que NO esté muted
+                    mostrarDebug('📡 Stream asignado a audioElement');
 
                     // Conectar al visualizador INMEDIATAMENTE (no requiere interacción)
                     conectarStreamAlVisualizador(stream);
@@ -323,11 +337,28 @@ function reproducirStreamPendiente() {
         return;
     }
 
-    mostrarDebug('▶️ Reproduciendo...');
+    // Asegurar que NO esté muted y el volumen sea audible
+    state.audioElement.muted = false;
+    if (state.audioElement.volume < 0.1) {
+        state.audioElement.volume = 0.7;
+        mostrarDebug('🔊 Volumen ajustado a 0.7');
+    }
+
+    mostrarDebug('▶️ Reproduciendo... vol=' + state.audioElement.volume);
     state.audioElement.play()
         .then(() => {
             mostrarDebug('✅ AUDIO FUNCIONANDO');
+            mostrarDebug('📊 Paused: ' + state.audioElement.paused + ', Vol: ' + state.audioElement.volume + ', Muted: ' + state.audioElement.muted);
             state.pendingStream = null;
+            
+            // Verificar después de 1 segundo si realmente está reproduciendo
+            setTimeout(() => {
+                if (!state.audioElement.paused) {
+                    mostrarDebug('✅ Confirmado: Audio activo');
+                } else {
+                    mostrarDebug('⚠️ Audio pausado inesperadamente');
+                }
+            }, 1000);
         })
         .catch(err => {
             mostrarDebug('❌ Error: ' + err.name);
