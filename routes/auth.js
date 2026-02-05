@@ -1,11 +1,11 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
-const { bd } = require('../config/database');
+const { pool } = require('../config/database');
 
 const enrutador = express.Router();
 
 // Endpoint de inicio de sesión
-enrutador.post('/iniciar-sesion', (req, res) => {
+enrutador.post('/iniciar-sesion', async (req, res) => {
     const { nombreUsuario, contrasena } = req.body;
 
     if (!nombreUsuario || !contrasena) {
@@ -13,13 +13,17 @@ enrutador.post('/iniciar-sesion', (req, res) => {
     }
 
     try {
-        const usuario = bd.prepare('SELECT * FROM usuarios WHERE nombre_usuario = ?').get(nombreUsuario);
+        const result = await pool.query(
+            'SELECT * FROM usuarios WHERE nombre_usuario = $1',
+            [nombreUsuario]
+        );
 
-        if (!usuario) {
+        if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Credenciales inválidas' });
         }
 
-        const contrasenaValida = bcrypt.compareSync(contrasena, usuario.hash_contrasena);
+        const usuario = result.rows[0];
+        const contrasenaValida = await bcrypt.compare(contrasena, usuario.hash_contrasena);
 
         if (!contrasenaValida) {
             return res.status(401).json({ error: 'Credenciales inválidas' });

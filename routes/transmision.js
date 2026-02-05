@@ -1,25 +1,31 @@
 const express = require('express');
-const { bd } = require('../config/database');
+const { pool } = require('../config/database');
 const { requerirAutenticacion } = require('./auth');
 
 const enrutador = express.Router();
 
 // Obtener estado de transmisión
-enrutador.get('/estado', (req, res) => {
+enrutador.get('/estado', async (req, res) => {
     try {
-        const estado = bd.prepare(`
-      SELECT * FROM estadisticas_transmision 
-      ORDER BY registrado_en DESC 
-      LIMIT 1
-    `).get() || {
-            esta_en_vivo: 0,
+        const estadoResult = await pool.query(`
+            SELECT * FROM estadisticas_transmision 
+            ORDER BY registrado_en DESC 
+            LIMIT 1
+        `);
+
+        const estado = estadoResult.rows[0] || {
+            esta_en_vivo: false,
             modo_actual: 'autodj',
             cantidad_oyentes: 0
         };
 
         let cancionActual = null;
         if (estado.cancion_actual_id) {
-            cancionActual = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(estado.cancion_actual_id);
+            const cancionResult = await pool.query(
+                'SELECT * FROM canciones WHERE id = $1',
+                [estado.cancion_actual_id]
+            );
+            cancionActual = cancionResult.rows[0] || null;
         }
 
         res.json({
@@ -36,7 +42,7 @@ enrutador.get('/estado', (req, res) => {
 });
 
 // Establecer modo de transmisión
-enrutador.post('/modo', requerirAutenticacion, (req, res) => {
+enrutador.post('/modo', requerirAutenticacion, async (req, res) => {
     const { modo, estaEnVivo } = req.body;
 
     if (!modo || !['vivo', 'autodj'].includes(modo)) {
@@ -44,11 +50,11 @@ enrutador.post('/modo', requerirAutenticacion, (req, res) => {
     }
 
     try {
-        // Actualizar o insertar estado actual
-        bd.prepare(`
-      INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
-      VALUES (?, ?, 0)
-    `).run(estaEnVivo ? 1 : 0, modo);
+        // Insertar nuevo estado
+        await pool.query(`
+            INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
+            VALUES ($1, $2, 0)
+        `, [estaEnVivo || false, modo]);
 
         // Notificar vía Socket.IO (si está disponible)
         if (req.app.locals.io) {
@@ -63,14 +69,15 @@ enrutador.post('/modo', requerirAutenticacion, (req, res) => {
 });
 
 // Obtener estadísticas de oyentes
-enrutador.get('/estadisticas', (req, res) => {
+enrutador.get('/estadisticas', async (req, res) => {
     try {
-        const estadisticas = bd.prepare(`
-      SELECT * FROM estadisticas_transmision 
-      ORDER BY registrado_en DESC 
-      LIMIT 100
-    `).all();
+        const estadisticasResult = await pool.query(`
+            SELECT * FROM estadisticas_transmision 
+            ORDER BY registrado_en DESC 
+            LIMIT 100
+        `);
 
+        const estadisticas = estadisticasResult.rows;
         const estadisticasActuales = estadisticas[0] || { cantidad_oyentes: 0 };
 
         res.json({
@@ -88,22 +95,32 @@ enrutador.get('/estadisticas', (req, res) => {
 });
 
 // Actualizar canción actual (llamado por servicio de transmisión)
-enrutador.post('/cancion-actual', requerirAutenticacion, (req, res) => {
+enrutador.post('/cancion-actual', requerirAutenticacion, async (req, res) => {
     const { cancionId } = req.body;
 
     try {
-        bd.prepare(`
-      INSERT INTO estadisticas_transmision (cancion_actual_id, esta_en_vivo, modo_actual, cantidad_oyentes)
-      SELECT ?, 
-             (SELECT esta_en_vivo FROM estadisticas_transmision ORDER BY registrado_en DESC LIMIT 1),
-             (SELECT modo_actual FROM estadisticas_transmision ORDER BY registrado_en DESC LIMIT 1),
-             0
-    `).run(cancionId || null);
+        // Obtener estado actual
+        const estadoResult = await pool.query(`
+            SELECT esta_en_vivo, modo_actual 
+            FROM estadisticas_transmision 
+            ORDER BY registrado_en DESC 
+            LIMIT 1
+        `);
+
+        const estadoActual = estadoResult.rows[0] || { esta_en_vivo: false, modo_actual: 'autodj' };
+
+        // Insertar nuevo registro
+        await pool.query(`
+            INSERT INTO estadisticas_transmision (cancion_actual_id, esta_en_vivo, modo_actual, cantidad_oyentes)
+            VALUES ($1, $2, $3, 0)
+        `, [cancionId || null, estadoActual.esta_en_vivo, estadoActual.modo_actual]);
 
         // Notificar a oyentes vía Socket.IO
         if (req.app.locals.io && cancionId) {
-            const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(cancionId);
-            req.app.locals.io.emit('cancion:actualizar', { cancion });
+            const cancionResult = await pool.query('SELECT * FROM canciones WHERE id = $1', [cancionId]);
+            if (cancionResult.rows.length > 0) {
+                req.app.locals.io.emit('cancion:actualizar', { cancion: cancionResult.rows[0] });
+            }
         }
 
         res.json({ exito: true });

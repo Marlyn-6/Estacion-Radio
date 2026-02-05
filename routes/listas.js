@@ -1,11 +1,11 @@
 const express = require('express');
-const { bd } = require('../config/database');
+const { pool } = require('../config/database');
 const { requerirAutenticacion } = require('./auth');
 
 const enrutador = express.Router();
 
 // Crear lista de reproducción
-enrutador.post('/', requerirAutenticacion, (req, res) => {
+enrutador.post('/', requerirAutenticacion, async (req, res) => {
     const { nombre } = req.body;
 
     if (!nombre) {
@@ -13,9 +13,11 @@ enrutador.post('/', requerirAutenticacion, (req, res) => {
     }
 
     try {
-        const resultado = bd.prepare('INSERT INTO listas_reproduccion (nombre) VALUES (?)').run(nombre);
-        const lista = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(resultado.lastInsertRowid);
-        res.json({ exito: true, lista });
+        const result = await pool.query(
+            'INSERT INTO listas_reproduccion (nombre) VALUES ($1) RETURNING *',
+            [nombre]
+        );
+        res.json({ exito: true, lista: result.rows[0] });
     } catch (error) {
         console.error('Error al crear lista:', error);
         res.status(500).json({ error: 'Error al crear lista de reproducción' });
@@ -23,22 +25,23 @@ enrutador.post('/', requerirAutenticacion, (req, res) => {
 });
 
 // Obtener todas las listas
-enrutador.get('/', (req, res) => {
+enrutador.get('/', async (req, res) => {
     try {
-        const listas = bd.prepare('SELECT * FROM listas_reproduccion ORDER BY creado_en DESC').all();
+        const result = await pool.query(`
+            SELECT l.*, COUNT(cl.id) as cantidadCanciones
+            FROM listas_reproduccion l
+            LEFT JOIN canciones_lista cl ON l.id = cl.lista_id
+            GROUP BY l.id
+            ORDER BY l.creado_en DESC
+        `);
 
-        // Obtener cantidad de canciones para cada lista
-        const listasConDetalle = listas.map(lista => {
-            const cantidadCanciones = bd.prepare('SELECT COUNT(*) as cantidad FROM canciones_lista WHERE lista_id = ?')
-                .get(lista.id);
+        // Convertir cantidadCanciones a número
+        const listas = result.rows.map(lista => ({
+            ...lista,
+            cantidadCanciones: parseInt(lista.cantidadcanciones || 0)
+        }));
 
-            return {
-                ...lista,
-                cantidadCanciones: cantidadCanciones.cantidad
-            };
-        });
-
-        res.json({ listas: listasConDetalle });
+        res.json({ listas });
     } catch (error) {
         console.error('Error al obtener listas:', error);
         res.status(500).json({ error: 'Error al obtener listas de reproducción' });
@@ -46,23 +49,29 @@ enrutador.get('/', (req, res) => {
 });
 
 // Obtener una lista con canciones
-enrutador.get('/:id', (req, res) => {
+enrutador.get('/:id', async (req, res) => {
     try {
-        const lista = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(req.params.id);
+        const listaResult = await pool.query(
+            'SELECT * FROM listas_reproduccion WHERE id = $1',
+            [req.params.id]
+        );
 
-        if (!lista) {
+        if (listaResult.rows.length === 0) {
             return res.status(404).json({ error: 'Lista no encontrada' });
         }
 
-        const canciones = bd.prepare(`
-      SELECT c.*, cl.posicion 
-      FROM canciones c
-      JOIN canciones_lista cl ON c.id = cl.cancion_id
-      WHERE cl.lista_id = ?
-      ORDER BY cl.posicion ASC
-    `).all(req.params.id);
+        const cancionesResult = await pool.query(`
+            SELECT c.*, cl.posicion 
+            FROM canciones c
+            JOIN canciones_lista cl ON c.id = cl.cancion_id
+            WHERE cl.lista_id = $1
+            ORDER BY cl.posicion ASC
+        `, [req.params.id]);
 
-        res.json({ lista: { ...lista, canciones } });
+        const lista = listaResult.rows[0];
+        lista.canciones = cancionesResult.rows;
+
+        res.json({ lista });
     } catch (error) {
         console.error('Error al obtener lista:', error);
         res.status(500).json({ error: 'Error al obtener lista de reproducción' });
@@ -70,41 +79,51 @@ enrutador.get('/:id', (req, res) => {
 });
 
 // Actualizar lista
-enrutador.put('/:id', requerirAutenticacion, (req, res) => {
+enrutador.put('/:id', requerirAutenticacion, async (req, res) => {
     const { nombre, estaActiva } = req.body;
 
     try {
-        const lista = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(req.params.id);
+        const listaResult = await pool.query(
+            'SELECT * FROM listas_reproduccion WHERE id = $1',
+            [req.params.id]
+        );
 
-        if (!lista) {
+        if (listaResult.rows.length === 0) {
             return res.status(404).json({ error: 'Lista no encontrada' });
         }
 
         // Si se activa esta lista, desactivar todas las demás
         if (estaActiva) {
-            bd.prepare('UPDATE listas_reproduccion SET esta_activa = 0').run();
+            await pool.query('UPDATE listas_reproduccion SET esta_activa = FALSE');
         }
 
         const actualizaciones = [];
         const valores = [];
+        let contador = 1;
 
         if (nombre !== undefined) {
-            actualizaciones.push('nombre = ?');
+            actualizaciones.push(`nombre = $${contador++}`);
             valores.push(nombre);
         }
 
         if (estaActiva !== undefined) {
-            actualizaciones.push('esta_activa = ?');
-            valores.push(estaActiva ? 1 : 0);
+            actualizaciones.push(`esta_activa = $${contador++}`);
+            valores.push(estaActiva);
         }
 
         if (actualizaciones.length > 0) {
             valores.push(req.params.id);
-            bd.prepare(`UPDATE listas_reproduccion SET ${actualizaciones.join(', ')} WHERE id = ?`).run(...valores);
+            await pool.query(
+                `UPDATE listas_reproduccion SET ${actualizaciones.join(', ')} WHERE id = $${contador}`,
+                valores
+            );
         }
 
-        const listaActualizada = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(req.params.id);
-        res.json({ exito: true, lista: listaActualizada });
+        const listaActualizada = await pool.query(
+            'SELECT * FROM listas_reproduccion WHERE id = $1',
+            [req.params.id]
+        );
+        res.json({ exito: true, lista: listaActualizada.rows[0] });
     } catch (error) {
         console.error('Error al actualizar lista:', error);
         res.status(500).json({ error: 'Error al actualizar lista de reproducción' });
@@ -112,15 +131,18 @@ enrutador.put('/:id', requerirAutenticacion, (req, res) => {
 });
 
 // Eliminar lista
-enrutador.delete('/:id', requerirAutenticacion, (req, res) => {
+enrutador.delete('/:id', requerirAutenticacion, async (req, res) => {
     try {
-        const lista = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(req.params.id);
+        const listaResult = await pool.query(
+            'SELECT * FROM listas_reproduccion WHERE id = $1',
+            [req.params.id]
+        );
 
-        if (!lista) {
+        if (listaResult.rows.length === 0) {
             return res.status(404).json({ error: 'Lista no encontrada' });
         }
 
-        bd.prepare('DELETE FROM listas_reproduccion WHERE id = ?').run(req.params.id);
+        await pool.query('DELETE FROM listas_reproduccion WHERE id = $1', [req.params.id]);
         res.json({ exito: true });
     } catch (error) {
         console.error('Error al eliminar lista:', error);
@@ -129,28 +151,38 @@ enrutador.delete('/:id', requerirAutenticacion, (req, res) => {
 });
 
 // Agregar canción a lista
-enrutador.post('/:id/canciones', requerirAutenticacion, (req, res) => {
+enrutador.post('/:id/canciones', requerirAutenticacion, async (req, res) => {
     const { cancionId } = req.body;
 
     try {
-        const lista = bd.prepare('SELECT * FROM listas_reproduccion WHERE id = ?').get(req.params.id);
-        const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(cancionId);
+        const listaResult = await pool.query(
+            'SELECT * FROM listas_reproduccion WHERE id = $1',
+            [req.params.id]
+        );
+        const cancionResult = await pool.query(
+            'SELECT * FROM canciones WHERE id = $1',
+            [cancionId]
+        );
 
-        if (!lista) {
+        if (listaResult.rows.length === 0) {
             return res.status(404).json({ error: 'Lista no encontrada' });
         }
 
-        if (!cancion) {
+        if (cancionResult.rows.length === 0) {
             return res.status(404).json({ error: 'Canción no encontrada' });
         }
 
         // Obtener siguiente posición
-        const maxPosicion = bd.prepare('SELECT MAX(posicion) as max FROM canciones_lista WHERE lista_id = ?')
-            .get(req.params.id);
-        const posicion = (maxPosicion.max || 0) + 1;
+        const maxPosResult = await pool.query(
+            'SELECT MAX(posicion) as max FROM canciones_lista WHERE lista_id = $1',
+            [req.params.id]
+        );
+        const posicion = (maxPosResult.rows[0].max || 0) + 1;
 
-        bd.prepare('INSERT INTO canciones_lista (lista_id, cancion_id, posicion) VALUES (?, ?, ?)')
-            .run(req.params.id, cancionId, posicion);
+        await pool.query(
+            'INSERT INTO canciones_lista (lista_id, cancion_id, posicion) VALUES ($1, $2, $3)',
+            [req.params.id, cancionId, posicion]
+        );
 
         res.json({ exito: true });
     } catch (error) {
@@ -160,19 +192,25 @@ enrutador.post('/:id/canciones', requerirAutenticacion, (req, res) => {
 });
 
 // Eliminar canción de lista
-enrutador.delete('/:id/canciones/:cancionId', requerirAutenticacion, (req, res) => {
+enrutador.delete('/:id/canciones/:cancionId', requerirAutenticacion, async (req, res) => {
     try {
-        bd.prepare('DELETE FROM canciones_lista WHERE lista_id = ? AND cancion_id = ?')
-            .run(req.params.id, req.params.cancionId);
+        await pool.query(
+            'DELETE FROM canciones_lista WHERE lista_id = $1 AND cancion_id = $2',
+            [req.params.id, req.params.cancionId]
+        );
 
         // Reordenar canciones restantes
-        const canciones = bd.prepare('SELECT * FROM canciones_lista WHERE lista_id = ? ORDER BY posicion')
-            .all(req.params.id);
+        const cancionesResult = await pool.query(
+            'SELECT * FROM canciones_lista WHERE lista_id = $1 ORDER BY posicion',
+            [req.params.id]
+        );
 
-        canciones.forEach((cancion, indice) => {
-            bd.prepare('UPDATE canciones_lista SET posicion = ? WHERE id = ?')
-                .run(indice + 1, cancion.id);
-        });
+        for (let i = 0; i < cancionesResult.rows.length; i++) {
+            await pool.query(
+                'UPDATE canciones_lista SET posicion = $1 WHERE id = $2',
+                [i + 1, cancionesResult.rows[i].id]
+            );
+        }
 
         res.json({ exito: true });
     } catch (error) {
@@ -182,7 +220,7 @@ enrutador.delete('/:id/canciones/:cancionId', requerirAutenticacion, (req, res) 
 });
 
 // Reordenar canciones en lista
-enrutador.put('/:id/canciones/reordenar', requerirAutenticacion, (req, res) => {
+enrutador.put('/:id/canciones/reordenar', requerirAutenticacion, async (req, res) => {
     const { idsCancion } = req.body; // Array de IDs en nuevo orden
 
     if (!Array.isArray(idsCancion)) {
@@ -190,10 +228,12 @@ enrutador.put('/:id/canciones/reordenar', requerirAutenticacion, (req, res) => {
     }
 
     try {
-        idsCancion.forEach((cancionId, indice) => {
-            bd.prepare('UPDATE canciones_lista SET posicion = ? WHERE lista_id = ? AND cancion_id = ?')
-                .run(indice + 1, req.params.id, cancionId);
-        });
+        for (let i = 0; i < idsCancion.length; i++) {
+            await pool.query(
+                'UPDATE canciones_lista SET posicion = $1 WHERE lista_id = $2 AND cancion_id = $3',
+                [i + 1, req.params.id, idsCancion[i]]
+            );
+        }
 
         res.json({ exito: true });
     } catch (error) {

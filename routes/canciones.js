@@ -3,7 +3,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { parseFile } = require('music-metadata');
-const { bd } = require('../config/database');
+const { pool } = require('../config/database');
 const { requerirAutenticacion } = require('./auth');
 
 const enrutador = express.Router();
@@ -65,19 +65,20 @@ enrutador.post('/subir', requerirAutenticacion, subir.single('cancion'), async (
         }
 
         // Guardar en base de datos
-        const resultado = bd.prepare(`
-      INSERT INTO canciones (nombre_archivo, titulo, artista, album, duracion, ruta_archivo)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
+        const result = await pool.query(`
+            INSERT INTO canciones (nombre_archivo, titulo, artista, album, duracion, ruta_archivo)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+        `, [
             req.file.originalname,
             metadatos.titulo,
             metadatos.artista,
             metadatos.album,
             metadatos.duracion,
             rutaArchivo
-        );
+        ]);
 
-        const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(resultado.lastInsertRowid);
+        const cancion = result.rows[0];
 
         res.json({
             exito: true,
@@ -90,10 +91,10 @@ enrutador.post('/subir', requerirAutenticacion, subir.single('cancion'), async (
 });
 
 // Obtener todas las canciones
-enrutador.get('/', (req, res) => {
+enrutador.get('/', async (req, res) => {
     try {
-        const canciones = bd.prepare('SELECT * FROM canciones ORDER BY subido_en DESC').all();
-        res.json({ canciones });
+        const result = await pool.query('SELECT * FROM canciones ORDER BY subido_en DESC');
+        res.json({ canciones: result.rows });
     } catch (error) {
         console.error('Error al obtener canciones:', error);
         res.status(500).json({ error: 'Error al obtener canciones' });
@@ -101,13 +102,13 @@ enrutador.get('/', (req, res) => {
 });
 
 // Obtener una canción
-enrutador.get('/:id', (req, res) => {
+enrutador.get('/:id', async (req, res) => {
     try {
-        const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(req.params.id);
-        if (!cancion) {
+        const result = await pool.query('SELECT * FROM canciones WHERE id = $1', [req.params.id]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Canción no encontrada' });
         }
-        res.json({ cancion });
+        res.json({ cancion: result.rows[0] });
     } catch (error) {
         console.error('Error al obtener canción:', error);
         res.status(500).json({ error: 'Error al obtener canción' });
@@ -115,12 +116,14 @@ enrutador.get('/:id', (req, res) => {
 });
 
 // Servir archivo de audio
-enrutador.get('/:id/audio', (req, res) => {
+enrutador.get('/:id/audio', async (req, res) => {
     try {
-        const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(req.params.id);
-        if (!cancion) {
+        const result = await pool.query('SELECT * FROM canciones WHERE id = $1', [req.params.id]);
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Canción no encontrada' });
         }
+
+        const cancion = result.rows[0];
 
         if (fs.existsSync(cancion.ruta_archivo)) {
             res.sendFile(path.resolve(cancion.ruta_archivo));
@@ -134,13 +137,15 @@ enrutador.get('/:id/audio', (req, res) => {
 });
 
 // Eliminar canción
-enrutador.delete('/:id', requerirAutenticacion, (req, res) => {
+enrutador.delete('/:id', requerirAutenticacion, async (req, res) => {
     try {
-        const cancion = bd.prepare('SELECT * FROM canciones WHERE id = ?').get(req.params.id);
+        const result = await pool.query('SELECT * FROM canciones WHERE id = $1', [req.params.id]);
 
-        if (!cancion) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Canción no encontrada' });
         }
+
+        const cancion = result.rows[0];
 
         // Eliminar archivo del sistema
         if (fs.existsSync(cancion.ruta_archivo)) {
@@ -148,7 +153,7 @@ enrutador.delete('/:id', requerirAutenticacion, (req, res) => {
         }
 
         // Eliminar de la base de datos
-        bd.prepare('DELETE FROM canciones WHERE id = ?').run(req.params.id);
+        await pool.query('DELETE FROM canciones WHERE id = $1', [req.params.id]);
 
         res.json({ exito: true });
     } catch (error) {

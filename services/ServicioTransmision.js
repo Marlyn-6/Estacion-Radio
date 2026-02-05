@@ -1,4 +1,4 @@
-const { bd } = require('../config/database');
+const { pool } = require('../config/database');
 const fs = require('fs');
 const path = require('path');
 
@@ -25,15 +25,19 @@ class ServicioTransmision {
     /**
      * Iniciar transmisión en vivo
      */
-    iniciarTransmisionEnVivo() {
+    async iniciarTransmisionEnVivo() {
         this.modo = 'vivo';
         this.estaEnVivo = true;
 
         // Actualizar base de datos
-        bd.prepare(`
-      INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
-      VALUES (1, 'vivo', 0)
-    `).run();
+        try {
+            await pool.query(`
+                INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
+                VALUES (TRUE, 'vivo', 0)
+            `);
+        } catch (error) {
+            console.error('Error al actualizar estadísticas:', error);
+        }
 
         console.log('🔴 Transmisión en vivo iniciada');
     }
@@ -41,7 +45,7 @@ class ServicioTransmision {
     /**
      * Detener transmisión en vivo
      */
-    detenerTransmisionEnVivo() {
+    async detenerTransmisionEnVivo() {
         this.estaEnVivo = false;
 
         // Cambiar a AutoDJ si hay una lista configurada
@@ -50,10 +54,14 @@ class ServicioTransmision {
         }
 
         // Actualizar base de datos
-        bd.prepare(`
-      INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
-      VALUES (0, ?, 0)
-    `).run(this.modo);
+        try {
+            await pool.query(`
+                INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
+                VALUES (FALSE, $1, 0)
+            `, [this.modo]);
+        } catch (error) {
+            console.error('Error al actualizar estadísticas:', error);
+        }
 
         console.log('⏹️  Transmisión en vivo detenida');
     }
@@ -67,20 +75,24 @@ class ServicioTransmision {
         this.estaEnVivo = false;
         this.indiceCancionActual = 0;
 
-        // Actualizar base de datos
-        bd.prepare(`
-      INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
-      VALUES (0, 'autodj', 0)
-    `).run();
+        try {
+            // Actualizar base de datos
+            await pool.query(`
+                INSERT INTO estadisticas_transmision (esta_en_vivo, modo_actual, cantidad_oyentes)
+                VALUES (FALSE, 'autodj', 0)
+            `);
 
-        // Establecer lista como activa
-        bd.prepare('UPDATE listas_reproduccion SET esta_activa = 0').run();
-        bd.prepare('UPDATE listas_reproduccion SET esta_activa = 1 WHERE id = ?').run(listaId);
+            // Establecer lista como activa
+            await pool.query('UPDATE listas_reproduccion SET esta_activa = FALSE');
+            await pool.query('UPDATE listas_reproduccion SET esta_activa = TRUE WHERE id = $1', [listaId]);
 
-        console.log(`🎵 AutoDJ iniciado con lista ${listaId}`);
+            console.log(`🎵 AutoDJ iniciado con lista ${listaId}`);
 
-        // Comenzar reproducción de primera canción
-        this.reproducirSiguienteCancion();
+            // Comenzar reproducción de primera canción
+            this.reproducirSiguienteCancion();
+        } catch (error) {
+            console.error('Error al iniciar AutoDJ:', error);
+        }
     }
 
     /**
@@ -97,20 +109,22 @@ class ServicioTransmision {
     /**
      * Reproducir siguiente canción en la lista
      */
-    reproducirSiguienteCancion() {
+    async reproducirSiguienteCancion() {
         if (!this.listaActualId || this.modo !== 'autodj') {
             return;
         }
 
         try {
             // Obtener canciones de la lista
-            const canciones = bd.prepare(`
-        SELECT c.* 
-        FROM canciones c
-        JOIN canciones_lista cl ON c.id = cl.cancion_id
-        WHERE cl.lista_id = ?
-        ORDER BY cl.posicion ASC
-      `).all(this.listaActualId);
+            const result = await pool.query(`
+                SELECT c.* 
+                FROM canciones c
+                JOIN canciones_lista cl ON c.id = cl.cancion_id
+                WHERE cl.lista_id = $1
+                ORDER BY cl.posicion ASC
+            `, [this.listaActualId]);
+
+            const canciones = result.rows;
 
             if (canciones.length === 0) {
                 console.log('No hay canciones en la lista');
@@ -121,10 +135,10 @@ class ServicioTransmision {
             const cancion = canciones[this.indiceCancionActual];
 
             // Actualizar canción actual en base de datos
-            bd.prepare(`
-        INSERT INTO estadisticas_transmision (cancion_actual_id, esta_en_vivo, modo_actual, cantidad_oyentes)
-        VALUES (?, 0, 'autodj', 0)
-      `).run(cancion.id);
+            await pool.query(`
+                INSERT INTO estadisticas_transmision (cancion_actual_id, esta_en_vivo, modo_actual, cantidad_oyentes)
+                VALUES ($1, FALSE, 'autodj', 0)
+            `, [cancion.id]);
 
             // Emitir actualización de canción a todos los clientes
             this.io.emit('cancion:actualizar', { cancion });
@@ -164,17 +178,21 @@ class ServicioTransmision {
     /**
      * Obtener canción actual
      */
-    obtenerCancionActual() {
+    async obtenerCancionActual() {
         try {
-            const ultimaEstadistica = bd.prepare(`
-        SELECT cancion_actual_id FROM estadisticas_transmision 
-        WHERE cancion_actual_id IS NOT NULL
-        ORDER BY registrado_en DESC 
-        LIMIT 1
-      `).get();
+            const estadisticaResult = await pool.query(`
+                SELECT cancion_actual_id FROM estadisticas_transmision 
+                WHERE cancion_actual_id IS NOT NULL
+                ORDER BY registrado_en DESC 
+                LIMIT 1
+            `);
 
-            if (ultimaEstadistica && ultimaEstadistica.cancion_actual_id) {
-                return bd.prepare('SELECT * FROM canciones WHERE id = ?').get(ultimaEstadistica.cancion_actual_id);
+            if (estadisticaResult.rows.length > 0 && estadisticaResult.rows[0].cancion_actual_id) {
+                const cancionResult = await pool.query(
+                    'SELECT * FROM canciones WHERE id = $1',
+                    [estadisticaResult.rows[0].cancion_actual_id]
+                );
+                return cancionResult.rows[0] || null;
             }
         } catch (error) {
             console.error('Error al obtener canción actual:', error);
