@@ -33,7 +33,9 @@ const elements = {
     songArtist: document.getElementById('song-artist'),
     listenersCount: document.getElementById('listener-count'),
     liveIndicator: document.getElementById('live-indicator'),
-    visualizer: document.getElementById('visualizer')
+    visualizer: document.getElementById('visualizer'),
+    mobilePlayPrompt: document.getElementById('mobile-play-prompt'),
+    mobilePlayBtn: document.getElementById('mobile-play-btn')
 };
 
 // ============================================
@@ -53,9 +55,35 @@ function inicializar() {
     ajustarCanvas();
     window.addEventListener('resize', ajustarCanvas);
 
-    // Detectar interacción del usuario
+    // Detectar si es móvil
+    const esMobil = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    console.log('📱 Dispositivo móvil:', esMobil);
+
+    // Detectar interacción del usuario (MÚLTIPLES EVENTOS para móviles)
     document.addEventListener('click', manejarInteraccionUsuario, { once: true });
+    document.addEventListener('touchstart', manejarInteraccionUsuario, { once: true });
+    document.addEventListener('touchend', manejarInteraccionUsuario, { once: true });
     document.addEventListener('keydown', manejarInteraccionUsuario, { once: true });
+
+    // Configurar botón de reproducción para móviles
+    if (elements.mobilePlayBtn) {
+        elements.mobilePlayBtn.addEventListener('click', () => {
+            console.log('🔊 Botón móvil presionado');
+            manejarInteraccionUsuario();
+            if (elements.mobilePlayPrompt) {
+                elements.mobilePlayPrompt.style.display = 'none';
+            }
+        });
+
+        elements.mobilePlayBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            console.log('🔊 Botón móvil tocado');
+            manejarInteraccionUsuario();
+            if (elements.mobilePlayPrompt) {
+                elements.mobilePlayPrompt.style.display = 'none';
+            }
+        });
+    }
 
     // Configurar controles
     configurarControles();
@@ -90,6 +118,11 @@ function manejarInteraccionUsuario() {
 
         // Reproducir stream pendiente si existe
         if (state.pendingStream) {
+            reproducirStreamPendiente();
+        }
+
+        // MÓVILES: Intentar reproducir el audio inmediatamente si hay srcObject
+        if (state.audioElement && state.audioElement.srcObject) {
             reproducirStreamPendiente();
         }
     }
@@ -141,6 +174,11 @@ async function manejarOferta(oferta, de) {
                         // Guardar como pendiente
                         state.pendingStream = stream;
                         console.log('⏳ Stream guardado, esperando interacción del usuario...');
+                        
+                        // Mostrar botón de reproducción para móviles
+                        if (elements.mobilePlayPrompt) {
+                            elements.mobilePlayPrompt.style.display = 'block';
+                        }
                     }
                 }
             };
